@@ -1,0 +1,145 @@
+{% extends "base.html" %}
+
+{% block title %}ジョブ詳細 - ManualStudio{% endblock %}
+
+{% block content %}
+<div class="card">
+    <div class="flex" style="align-items: center; justify-content: space-between;">
+        <h2>{{ job.title or 'ジョブ詳細' }}</h2>
+        <span class="status-badge status-{{ job.status.value }}">{{ job.status.value }}</span>
+    </div>
+
+    <table class="mt-4">
+        <tr>
+            <th style="width: 150px;">ジョブID</th>
+            <td><code>{{ job.id }}</code></td>
+        </tr>
+        <tr>
+            <th>作成日時</th>
+            <td>{{ job.created_at.strftime('%Y-%m-%d %H:%M:%S') if job.created_at else '-' }}</td>
+        </tr>
+        <tr>
+            <th>言語</th>
+            <td>{{ job.language }}</td>
+        </tr>
+        {% if job.goal %}
+        <tr>
+            <th>目的</th>
+            <td>{{ job.goal }}</td>
+        </tr>
+        {% endif %}
+        {% if job.video_duration_sec %}
+        <tr>
+            <th>動画情報</th>
+            <td>{{ "%.1f"|format(job.video_duration_sec) }}秒 / {{ job.video_resolution }} / {{ "%.1f"|format(job.video_fps) }}fps</td>
+        </tr>
+        {% endif %}
+    </table>
+</div>
+
+{% if job.status == JobStatus.RUNNING or job.status == JobStatus.QUEUED %}
+<div class="card">
+    <h2>処理中</h2>
+    <div class="progress-bar">
+        <div class="progress-bar-fill" id="progress-fill" style="width: {{ job.progress }}%"></div>
+    </div>
+    <p id="stage-text">
+        {% if job.stage %}
+        ステージ: {{ job.stage }} ({{ job.progress }}%)
+        {% else %}
+        待機中...
+        {% endif %}
+    </p>
+    <p class="mt-4" style="color: #888;">このページは自動的に更新されます</p>
+</div>
+{% endif %}
+
+{% if job.status == JobStatus.FAILED %}
+<div class="error-box">
+    <strong>エラーが発生しました</strong>
+    <p class="mt-4">{{ job.error_message or '不明なエラー' }}</p>
+    {% if job.trace_id %}
+    <p style="margin-top: 8px; font-size: 0.85rem;">Trace ID: <code>{{ job.trace_id }}</code></p>
+    {% endif %}
+</div>
+{% endif %}
+
+{% if job.status == JobStatus.SUCCEEDED %}
+<div class="success-box">
+    <strong>処理完了</strong>
+    <p>マニュアルの生成が完了しました。</p>
+</div>
+
+<div class="card">
+    <h2>ダウンロード</h2>
+    <div class="flex mt-4">
+        <a href="/api/jobs/{{ job.id }}/download/pptx" class="btn btn-primary">
+            PowerPoint (.pptx) をダウンロード
+        </a>
+        <a href="/api/jobs/{{ job.id }}/download/frames" class="btn btn-secondary">
+            フレーム画像 (.zip) をダウンロード
+        </a>
+    </div>
+</div>
+
+{% if steps_data %}
+<div class="card">
+    <div class="flex" style="align-items: center; justify-content: space-between;">
+        <h2>生成されたステップ</h2>
+        <a href="/jobs/{{ job.id }}/steps" class="btn btn-secondary">詳細プレビュー</a>
+    </div>
+
+    <table class="mt-4">
+        <thead>
+            <tr>
+                <th style="width: 50px;">No.</th>
+                <th style="width: 100px;">時間</th>
+                <th>テロップ</th>
+                <th>操作</th>
+            </tr>
+        </thead>
+        <tbody>
+            {% for step in steps_data.steps %}
+            <tr>
+                <td>{{ step.no }}</td>
+                <td>{{ step.start }} - {{ step.end }}</td>
+                <td>{{ step.telop }}</td>
+                <td>{{ step.action }}</td>
+            </tr>
+            {% endfor %}
+        </tbody>
+    </table>
+</div>
+{% endif %}
+
+{% endif %}
+
+<div class="mt-4">
+    <a href="/" class="btn btn-secondary">戻る</a>
+</div>
+{% endblock %}
+
+{% block extra_js %}
+{% if job.status == JobStatus.RUNNING or job.status == JobStatus.QUEUED %}
+<script>
+// Auto-refresh every 3 seconds for running jobs
+setInterval(async function() {
+    try {
+        const response = await fetch('/api/jobs/{{ job.id }}');
+        const data = await response.json();
+
+        document.getElementById('progress-fill').style.width = data.progress + '%';
+        document.getElementById('stage-text').textContent =
+            data.stage ? `ステージ: ${data.stage} (${data.progress}%)` : '待機中...';
+
+        // Reload page if status changed
+        if (data.status !== '{{ job.status.value }}') {
+            window.location.reload();
+        }
+    } catch (e) {
+        console.error('Failed to fetch job status:', e);
+    }
+}, 3000);
+</script>
+{% endif %}
+{% endblock %}

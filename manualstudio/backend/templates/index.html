@@ -1,0 +1,124 @@
+{% extends "base.html" %}
+
+{% block title %}ManualStudio - 動画アップロード{% endblock %}
+
+{% block content %}
+<div class="card">
+    <h2>動画をアップロード</h2>
+    <p class="mb-4">画面録画（mp4/mov）をアップロードすると、操作マニュアル（PPTX）が自動生成されます。</p>
+
+    <form id="upload-form" action="/api/jobs" method="post" enctype="multipart/form-data">
+        <div class="form-group">
+            <label for="video_file">動画ファイル *</label>
+            <input type="file" id="video_file" name="video_file" accept=".mp4,.mov,.avi,.mkv,.webm" required>
+            <small>対応形式: MP4, MOV, AVI, MKV, WebM（最大{{ max_video_size_mb }}MB、{{ max_video_minutes }}分）</small>
+        </div>
+
+        <div class="flex">
+            <div class="flex-1 form-group">
+                <label for="title">タイトル</label>
+                <input type="text" id="title" name="title" placeholder="例: 経費精算システム操作手順">
+            </div>
+
+            <div class="flex-1 form-group">
+                <label for="language">言語</label>
+                <select id="language" name="language">
+                    <option value="ja" selected>日本語</option>
+                    <option value="en">English</option>
+                </select>
+            </div>
+        </div>
+
+        <div class="form-group">
+            <label for="goal">マニュアルの目的</label>
+            <textarea id="goal" name="goal" placeholder="例: 新入社員向けに経費精算の申請方法を説明する"></textarea>
+        </div>
+
+        <button type="submit" class="btn btn-primary" id="submit-btn">
+            アップロードして生成開始
+        </button>
+    </form>
+
+    <div id="upload-progress" style="display: none;">
+        <div class="progress-bar">
+            <div class="progress-bar-fill" id="progress-fill" style="width: 0%"></div>
+        </div>
+        <p id="progress-text">アップロード中...</p>
+    </div>
+</div>
+
+<div class="card">
+    <h2>使い方</h2>
+    <ol style="margin-left: 20px;">
+        <li>画面操作を録画したMP4/MOVファイルを用意します</li>
+        <li>上のフォームからファイルをアップロードします</li>
+        <li>自動的に以下の処理が行われます：
+            <ul style="margin-left: 20px; margin-top: 8px;">
+                <li>音声の文字起こし</li>
+                <li>画面転換の検出</li>
+                <li>操作手順の構造化</li>
+                <li>PowerPointスライドの生成</li>
+            </ul>
+        </li>
+        <li>完了後、PPTXファイルをダウンロードできます</li>
+    </ol>
+</div>
+{% endblock %}
+
+{% block extra_js %}
+<script>
+document.getElementById('upload-form').addEventListener('submit', async function(e) {
+    e.preventDefault();
+
+    const form = this;
+    const submitBtn = document.getElementById('submit-btn');
+    const progressDiv = document.getElementById('upload-progress');
+    const progressFill = document.getElementById('progress-fill');
+    const progressText = document.getElementById('progress-text');
+
+    submitBtn.disabled = true;
+    progressDiv.style.display = 'block';
+
+    const formData = new FormData(form);
+
+    try {
+        const xhr = new XMLHttpRequest();
+
+        xhr.upload.addEventListener('progress', function(e) {
+            if (e.lengthComputable) {
+                const percent = Math.round((e.loaded / e.total) * 100);
+                progressFill.style.width = percent + '%';
+                progressText.textContent = `アップロード中... ${percent}%`;
+            }
+        });
+
+        xhr.addEventListener('load', function() {
+            if (xhr.status === 201) {
+                const response = JSON.parse(xhr.responseText);
+                progressText.textContent = 'アップロード完了！リダイレクト中...';
+                window.location.href = '/jobs/' + response.job_id;
+            } else {
+                const error = JSON.parse(xhr.responseText);
+                alert('エラー: ' + (error.detail || error.message || 'アップロードに失敗しました'));
+                submitBtn.disabled = false;
+                progressDiv.style.display = 'none';
+            }
+        });
+
+        xhr.addEventListener('error', function() {
+            alert('ネットワークエラーが発生しました');
+            submitBtn.disabled = false;
+            progressDiv.style.display = 'none';
+        });
+
+        xhr.open('POST', '/api/jobs');
+        xhr.send(formData);
+
+    } catch (error) {
+        alert('エラー: ' + error.message);
+        submitBtn.disabled = false;
+        progressDiv.style.display = 'none';
+    }
+});
+</script>
+{% endblock %}

@@ -1,0 +1,23 @@
+FROM python:3.11-slim
+
+WORKDIR /app
+
+# Install system dependencies including ffmpeg and scenedetect deps
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    ffmpeg \
+    libpq-dev \
+    gcc \
+    curl \
+    libgl1-mesa-glx \
+    libglib2.0-0 \
+    && rm -rf /var/lib/apt/lists/*
+
+# Install Python dependencies
+COPY requirements.txt requirements-worker.txt ./
+RUN pip install --no-cache-dir -r requirements.txt -r requirements-worker.txt
+
+# Copy application code
+COPY . .
+
+# Default command
+CMD ["celery", "-A", "app.workers.celery_app", "worker", "--loglevel=info"]
