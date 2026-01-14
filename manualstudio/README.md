@@ -113,6 +113,25 @@ docker-compose up --build
 - **PPTX**: PowerPointスライド
 - **frames.zip**: 抽出されたフレーム画像
 
+### 4. 手順の編集とPPTX再生成
+
+処理完了後、生成された手順を編集してPPTXを再生成できます:
+
+1. ジョブ詳細ページで「ステッププレビュー」をクリック
+2. 「編集モード」ボタンをクリックして編集モードに切り替え
+3. 各ステップのテロップ、操作説明、ナレーションなどを編集
+4. 「保存」ボタンをクリックして変更を保存（新しいバージョンが作成されます）
+5. 「PPTX再生成」ボタンをクリックして更新されたPPTXを生成
+
+編集可能な項目:
+- タイトル、目的
+- 各ステップのテロップ（15文字以内推奨）
+- 操作説明、操作対象
+- ナレーション
+- 注意事項
+
+バージョン履歴により、過去の編集内容も保持されます。
+
 ## 処理パイプライン
 
 1. **INGEST**: 動画のアップロードと検証
@@ -149,9 +168,32 @@ Response: { "job_id", "status", "stage", "progress", ... }
 
 ### steps.json取得
 ```
-GET /api/jobs/{job_id}/steps
+GET /api/jobs/{job_id}/steps?version=N
 
-Response: steps.json
+Response: { "version": N, "edit_source": "llm", "steps_json": {...} }
+```
+
+### steps.json更新
+```
+PUT /api/jobs/{job_id}/steps
+Content-Type: application/json
+
+Body: { "steps_json": {...}, "edit_note": "編集メモ" }
+Response: { "job_id": "uuid", "version": N, "message": "..." }
+```
+
+### バージョン履歴取得
+```
+GET /api/jobs/{job_id}/steps/versions
+
+Response: { "current_version": N, "versions": [...] }
+```
+
+### PPTX再生成
+```
+POST /api/jobs/{job_id}/regenerate/pptx
+
+Response: { "job_id": "uuid", "status": "RUNNING", "task_id": "..." }
 ```
 
 ### PPTXダウンロード
@@ -318,8 +360,33 @@ celery -A app.workers.celery_app worker --loglevel=info
 
 ```bash
 cd backend
+
+# 開発用依存関係のインストール
+pip install -r requirements-dev.txt
+
+# 全テストを実行
 pytest tests/
+
+# 詳細出力で実行
+pytest tests/ -v
+
+# 特定のテストファイルを実行
+pytest tests/test_e2e.py
+pytest tests/test_api_steps.py
+
+# カバレッジレポート付きで実行
+pytest tests/ --cov=app --cov-report=html
 ```
+
+テストは mock プロバイダーを使用するため、OpenAI APIキーは不要です。
+
+#### テストファイル構成
+
+- `tests/conftest.py` - pytest フィクスチャ（テストDB、モックストレージ、クライアント）
+- `tests/test_e2e.py` - E2Eスモークテスト
+- `tests/test_api_steps.py` - Steps API のユニットテスト
+- `tests/test_utils.py` - ユーティリティ関数のテスト
+- `tests/fixtures/` - テスト用フィクスチャデータ
 
 ### マイグレーション
 
@@ -343,7 +410,9 @@ alembic downgrade -1
 
 ## 今後の拡張
 
-- [ ] 手順の手動編集機能
+- [x] 手順の手動編集機能
+- [x] PPTX再生成機能
+- [x] バージョン履歴管理
 - [ ] スライドテンプレートのカスタマイズ
 - [ ] 複数言語対応の強化
 - [ ] Azure/AWS Transcribe対応

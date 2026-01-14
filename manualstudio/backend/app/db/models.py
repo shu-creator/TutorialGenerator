@@ -3,8 +3,9 @@ import uuid
 from datetime import datetime
 from enum import Enum as PyEnum
 
-from sqlalchemy import Column, String, Integer, Text, DateTime, Enum, Float, JSON
+from sqlalchemy import Column, String, Integer, Text, DateTime, Enum, Float, JSON, ForeignKey
 from sqlalchemy.dialects.postgresql import UUID
+from sqlalchemy.orm import relationship
 
 from .database import Base
 
@@ -27,6 +28,7 @@ class JobStage(str, PyEnum):
     EXTRACT_FRAMES = "EXTRACT_FRAMES"
     GENERATE_STEPS = "GENERATE_STEPS"
     GENERATE_PPTX = "GENERATE_PPTX"
+    GENERATE_PPTX_ONLY = "GENERATE_PPTX_ONLY"
     FINALIZE = "FINALIZE"
 
 
@@ -67,10 +69,16 @@ class Job(Base):
     transcript_segments = Column(JSON, nullable=True)
     candidate_frames = Column(JSON, nullable=True)
 
+    # Steps version tracking
+    current_steps_version = Column(Integer, default=1, nullable=False)
+
     # Error handling
     error_code = Column(String(100), nullable=True)
     error_message = Column(Text, nullable=True)
     trace_id = Column(String(50), nullable=True)
+
+    # Relationships
+    steps_versions = relationship("StepsVersion", back_populates="job", order_by="StepsVersion.version")
 
     def to_dict(self) -> dict:
         """Convert model to dictionary."""
@@ -87,6 +95,7 @@ class Job(Base):
             "video_duration_sec": self.video_duration_sec,
             "video_fps": self.video_fps,
             "video_resolution": self.video_resolution,
+            "current_steps_version": self.current_steps_version,
             "error_code": self.error_code,
             "error_message": self.error_message,
             "trace_id": self.trace_id,
@@ -95,4 +104,44 @@ class Job(Base):
                 "pptx": self.pptx_uri is not None,
                 "frames": self.frames_prefix_uri is not None,
             }
+        }
+
+    def get_current_steps_version(self) -> "StepsVersion":
+        """Get the current steps version object."""
+        for v in self.steps_versions:
+            if v.version == self.current_steps_version:
+                return v
+        return None
+
+
+class StepsVersion(Base):
+    """Steps version model for tracking edits to steps.json."""
+
+    __tablename__ = "steps_versions"
+
+    id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    job_id = Column(UUID(as_uuid=True), ForeignKey("jobs.id"), nullable=False, index=True)
+    version = Column(Integer, nullable=False)
+    created_at = Column(DateTime, default=datetime.utcnow, nullable=False)
+
+    # Steps data
+    steps_json = Column(JSON, nullable=False)
+
+    # Edit metadata
+    edit_source = Column(String(50), nullable=True)  # "llm", "manual", etc.
+    edit_note = Column(Text, nullable=True)
+
+    # Relationship
+    job = relationship("Job", back_populates="steps_versions")
+
+    def to_dict(self) -> dict:
+        """Convert model to dictionary."""
+        return {
+            "id": str(self.id),
+            "job_id": str(self.job_id),
+            "version": self.version,
+            "created_at": self.created_at.isoformat() if self.created_at else None,
+            "edit_source": self.edit_source,
+            "edit_note": self.edit_note,
+            "steps_json": self.steps_json,
         }
