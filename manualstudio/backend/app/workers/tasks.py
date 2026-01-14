@@ -1,0 +1,337 @@
+"""Celery tasks for video processing pipeline."""
+import json
+import os
+import shutil
+import tempfile
+import uuid
+from datetime import datetime
+
+from celery import Task
+from sqlalchemy.orm import Session
+
+from app.core.config import get_settings
+from app.core.logging import get_logger, set_trace_id
+from app.core.exceptions import ManualStudioError
+from app.db.database import SessionLocal
+from app.db.models import Job, JobStatus, JobStage
+from app.services.storage import get_storage_service
+from app.services.transcription import get_transcription_service
+from app.services.scene_detection import get_candidate_frames
+from app.services.llm import get_llm_service
+from app.services.pptx_generator import PPTXGenerator
+from app.utils.ffmpeg import probe_video, extract_audio, extract_frame
+from app.utils.timecode import seconds_to_mmss
+
+from .celery_app import celery_app
+
+logger = get_logger(__name__)
+settings = get_settings()
+
+
+class JobTask(Task):
+    """Base task class with database session management."""
+
+    _db: Session = None
+
+    @property
+    def db(self) -> Session:
+        if self._db is None:
+            self._db = SessionLocal()
+        return self._db
+
+    def after_return(self, *args, **kwargs):
+        if self._db is not None:
+            self._db.close()
+            self._db = None
+
+
+def update_job_progress(db: Session, job: Job, stage: str, progress: int):
+    """Update job stage and progress."""
+    job.stage = stage
+    job.progress = progress
+    job.updated_at = datetime.utcnow()
+    db.commit()
+    logger.info(f"Job {job.id}: {stage} ({progress}%)")
+
+
+def fail_job(db: Session, job: Job, error: Exception):
+    """Mark job as failed."""
+    job.status = JobStatus.FAILED
+    job.updated_at = datetime.utcnow()
+
+    if isinstance(error, ManualStudioError):
+        job.error_code = error.code
+        job.error_message = error.message
+    else:
+        job.error_code = "INTERNAL_ERROR"
+        job.error_message = str(error)
+
+    db.commit()
+    logger.error(f"Job {job.id} failed: {job.error_message}")
+
+
+@celery_app.task(bind=True, base=JobTask, name="app.workers.tasks.process_video")
+def process_video(self, job_id: str):
+    """
+    Main video processing pipeline task.
+
+    Stages:
+    1. INGEST - Download video, validate, extract metadata
+    2. EXTRACT_AUDIO - Extract audio track
+    3. TRANSCRIBE - Transcribe audio to text
+    4. DETECT_SCENES - Detect scene changes
+    5. EXTRACT_FRAMES - Extract candidate frames
+    6. GENERATE_STEPS - Generate steps.json with LLM
+    7. GENERATE_PPTX - Generate PowerPoint
+    8. FINALIZE - Upload outputs, update job
+    """
+    db = self.db
+    storage = get_storage_service()
+
+    # Get job
+    job = db.query(Job).filter(Job.id == uuid.UUID(job_id)).first()
+    if not job:
+        logger.error(f"Job not found: {job_id}")
+        return
+
+    # Set trace ID for logging
+    if job.trace_id:
+        set_trace_id(job.trace_id)
+
+    logger.info(f"Starting job processing: {job_id}")
+
+    # Mark as running
+    job.status = JobStatus.RUNNING
+    db.commit()
+
+    # Create temp directory for processing
+    temp_dir = tempfile.mkdtemp(prefix=f"manualstudio_{job_id}_")
+
+    try:
+        # ===== STAGE 1: INGEST =====
+        update_job_progress(db, job, JobStage.INGEST.value, 5)
+
+        # Download video
+        video_key = storage.key_from_uri(job.input_video_uri)
+        video_ext = os.path.splitext(video_key)[1]
+        local_video = os.path.join(temp_dir, f"input{video_ext}")
+        storage.download_file(video_key, local_video)
+
+        # Probe video metadata
+        video_info = probe_video(local_video)
+        job.video_duration_sec = video_info.duration_sec
+        job.video_fps = video_info.fps
+        job.video_resolution = video_info.resolution
+        db.commit()
+
+        logger.info(f"Video: {video_info.duration_sec:.1f}s, {video_info.resolution}, {video_info.fps:.1f}fps")
+
+        # Validate duration
+        max_duration = settings.max_video_duration_seconds
+        if video_info.duration_sec > max_duration:
+            from app.core.exceptions import VideoTooLongError
+            raise VideoTooLongError(video_info.duration_sec, max_duration)
+
+        # Check for audio
+        if not video_info.has_audio:
+            logger.warning("Video has no audio track, using empty transcript")
+            transcript_segments = []
+        else:
+            # ===== STAGE 2: EXTRACT AUDIO =====
+            update_job_progress(db, job, JobStage.EXTRACT_AUDIO.value, 15)
+
+            audio_path = os.path.join(temp_dir, "audio.wav")
+            extract_audio(local_video, audio_path)
+
+            # Upload audio
+            audio_key = f"jobs/{job_id}/audio.wav"
+            with open(audio_path, "rb") as f:
+                storage.upload_file(f, audio_key, "audio/wav")
+            job.audio_uri = f"s3://{settings.s3_bucket}/{audio_key}"
+            db.commit()
+
+            # ===== STAGE 3: TRANSCRIBE =====
+            update_job_progress(db, job, JobStage.TRANSCRIBE.value, 25)
+
+            transcription_service = get_transcription_service()
+            job.transcription_provider = transcription_service.provider_name
+
+            segments = transcription_service.transcribe(audio_path, job.language)
+            transcript_segments = transcription_service.segments_to_dict(segments)
+
+            job.transcript_segments = transcript_segments
+            db.commit()
+
+            logger.info(f"Transcribed {len(transcript_segments)} segments")
+
+        # ===== STAGE 4: DETECT SCENES =====
+        update_job_progress(db, job, JobStage.DETECT_SCENES.value, 40)
+
+        frames_dir = os.path.join(temp_dir, "frames")
+        os.makedirs(frames_dir, exist_ok=True)
+
+        candidates = get_candidate_frames(
+            local_video,
+            video_info.duration_sec,
+            frames_dir,
+            use_scene_detection=True,
+            fallback_interval=3.0,
+            max_frames=50
+        )
+
+        candidate_dicts = [
+            {
+                "time_sec": c.time_sec,
+                "time_mmss": c.time_mmss,
+                "filename": c.filename,
+                "scene_index": c.scene_index
+            }
+            for c in candidates
+        ]
+        job.candidate_frames = candidate_dicts
+        db.commit()
+
+        # ===== STAGE 5: EXTRACT FRAMES =====
+        update_job_progress(db, job, JobStage.EXTRACT_FRAMES.value, 50)
+
+        frames_prefix = f"jobs/{job_id}/frames/"
+        frame_local_paths = {}
+
+        for i, candidate in enumerate(candidates):
+            local_path = os.path.join(frames_dir, candidate.filename)
+            extract_frame(local_video, local_path, candidate.time_sec, width=1280)
+
+            # Upload frame
+            frame_key = f"{frames_prefix}{candidate.filename}"
+            with open(local_path, "rb") as f:
+                storage.upload_file(f, frame_key, "image/png")
+
+            frame_local_paths[candidate.filename] = local_path
+
+            # Update progress
+            progress = 50 + int((i + 1) / len(candidates) * 15)
+            update_job_progress(db, job, JobStage.EXTRACT_FRAMES.value, progress)
+
+        job.frames_prefix_uri = f"s3://{settings.s3_bucket}/{frames_prefix}"
+        db.commit()
+
+        logger.info(f"Extracted {len(candidates)} frames")
+
+        # ===== STAGE 6: GENERATE STEPS =====
+        update_job_progress(db, job, JobStage.GENERATE_STEPS.value, 70)
+
+        llm_service = get_llm_service()
+        job.llm_provider = llm_service.provider_name
+
+        video_info_dict = {
+            "duration_sec": video_info.duration_sec,
+            "fps": video_info.fps,
+            "resolution": video_info.resolution,
+        }
+
+        steps_data = llm_service.generate_steps(
+            title=job.title or "操作マニュアル",
+            goal=job.goal or "",
+            language=job.language,
+            transcript_segments=transcript_segments if 'transcript_segments' in dir() else [],
+            candidate_frames=candidate_dicts,
+            video_info=video_info_dict,
+            transcription_provider=job.transcription_provider or "none",
+            max_retries=1
+        )
+
+        # Save steps.json
+        steps_json_bytes = json.dumps(steps_data, ensure_ascii=False, indent=2).encode("utf-8")
+        steps_key = f"jobs/{job_id}/steps.json"
+        storage.upload_bytes(steps_json_bytes, steps_key, "application/json")
+        job.steps_json_uri = f"s3://{settings.s3_bucket}/{steps_key}"
+        db.commit()
+
+        logger.info(f"Generated {len(steps_data.get('steps', []))} steps")
+
+        # Rename frames to match step numbers
+        step_frame_paths = {}
+        for step in steps_data.get("steps", []):
+            step_no = step.get("no", 0)
+            frame_file = step.get("frame_file", "")
+
+            # The frame_file from LLM might be step_XXX.png format
+            # We need to map it to actual candidate files
+            if frame_file.startswith("step_"):
+                # Find corresponding candidate
+                idx = step_no - 1
+                if 0 <= idx < len(candidates):
+                    candidate = candidates[idx]
+                    src_path = frame_local_paths.get(candidate.filename)
+                    if src_path and os.path.exists(src_path):
+                        step_frame_paths[frame_file] = src_path
+            else:
+                # Direct candidate filename
+                src_path = frame_local_paths.get(frame_file)
+                if src_path:
+                    step_frame_paths[frame_file] = src_path
+
+        # Upload step frames with correct names
+        for frame_file, local_path in step_frame_paths.items():
+            frame_key = f"{frames_prefix}{frame_file}"
+            with open(local_path, "rb") as f:
+                storage.upload_file(f, frame_key, "image/png")
+
+        # ===== STAGE 7: GENERATE PPTX =====
+        update_job_progress(db, job, JobStage.GENERATE_PPTX.value, 85)
+
+        pptx_generator = PPTXGenerator()
+        pptx_local = os.path.join(temp_dir, "output.pptx")
+
+        # Build frame paths dict using step frame names
+        pptx_frame_paths = {}
+        for step in steps_data.get("steps", []):
+            frame_file = step.get("frame_file", "")
+            if frame_file in step_frame_paths:
+                pptx_frame_paths[frame_file] = step_frame_paths[frame_file]
+            else:
+                # Fallback: try to find by step number
+                step_no = step.get("no", 0)
+                idx = step_no - 1
+                if 0 <= idx < len(candidates):
+                    candidate = candidates[idx]
+                    local_path = frame_local_paths.get(candidate.filename)
+                    if local_path:
+                        pptx_frame_paths[frame_file] = local_path
+
+        pptx_bytes = pptx_generator.generate(
+            steps_data,
+            pptx_frame_paths,
+            pptx_local
+        )
+
+        # Upload PPTX
+        pptx_key = f"jobs/{job_id}/output.pptx"
+        storage.upload_bytes(pptx_bytes, pptx_key, "application/vnd.openxmlformats-officedocument.presentationml.presentation")
+        job.pptx_uri = f"s3://{settings.s3_bucket}/{pptx_key}"
+        db.commit()
+
+        logger.info("PPTX generated and uploaded")
+
+        # ===== STAGE 8: FINALIZE =====
+        update_job_progress(db, job, JobStage.FINALIZE.value, 95)
+
+        # Mark job as succeeded
+        job.status = JobStatus.SUCCEEDED
+        job.progress = 100
+        job.updated_at = datetime.utcnow()
+        db.commit()
+
+        logger.info(f"Job completed successfully: {job_id}")
+
+    except Exception as e:
+        logger.exception(f"Job {job_id} failed with error")
+        fail_job(db, job, e)
+        raise
+
+    finally:
+        # Cleanup temp directory
+        try:
+            shutil.rmtree(temp_dir, ignore_errors=True)
+        except Exception as e:
+            logger.warning(f"Failed to cleanup temp dir: {e}")

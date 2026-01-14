@@ -1,0 +1,194 @@
+{% extends "base.html" %}
+
+{% block title %}ステッププレビュー - ManualStudio{% endblock %}
+
+{% block extra_css %}
+<style>
+    .step-card {
+        display: flex;
+        gap: 24px;
+        padding: 24px;
+        border-bottom: 1px solid #eee;
+    }
+
+    .step-card:last-child {
+        border-bottom: none;
+    }
+
+    .step-image {
+        flex-shrink: 0;
+        width: 400px;
+    }
+
+    .step-image img {
+        width: 100%;
+        border-radius: 8px;
+        box-shadow: 0 2px 8px rgba(0,0,0,0.1);
+    }
+
+    .step-content {
+        flex: 1;
+    }
+
+    .step-header {
+        display: flex;
+        align-items: center;
+        gap: 12px;
+        margin-bottom: 16px;
+    }
+
+    .step-number {
+        background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+        color: white;
+        width: 40px;
+        height: 40px;
+        border-radius: 50%;
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        font-weight: bold;
+        font-size: 1.2rem;
+    }
+
+    .step-time {
+        color: #888;
+        font-size: 0.9rem;
+    }
+
+    .step-telop {
+        font-size: 1.3rem;
+        font-weight: 600;
+        margin-bottom: 12px;
+    }
+
+    .step-action {
+        background: #f8f9fa;
+        padding: 12px;
+        border-radius: 6px;
+        margin-bottom: 12px;
+    }
+
+    .step-narration {
+        color: #555;
+        font-style: italic;
+    }
+
+    .step-caution {
+        background: #fff3cd;
+        border-left: 4px solid #ffc107;
+        padding: 12px;
+        margin-top: 12px;
+    }
+
+    @media (max-width: 768px) {
+        .step-card {
+            flex-direction: column;
+        }
+
+        .step-image {
+            width: 100%;
+        }
+    }
+</style>
+{% endblock %}
+
+{% block content %}
+<div class="card">
+    <div class="flex" style="align-items: center; justify-content: space-between;">
+        <div>
+            <h2>{{ steps_data.title }}</h2>
+            {% if steps_data.goal %}
+            <p style="color: #666; margin-top: 8px;">{{ steps_data.goal }}</p>
+            {% endif %}
+        </div>
+        <div>
+            <a href="/api/jobs/{{ job.id }}/download/pptx" class="btn btn-primary">PPTXダウンロード</a>
+        </div>
+    </div>
+</div>
+
+<div class="card" style="padding: 0;">
+    {% for step in steps_data.steps %}
+    <div class="step-card">
+        <div class="step-image">
+            <img src="/api/jobs/{{ job.id }}/frames/{{ step.frame_file }}"
+                 alt="Step {{ step.no }}"
+                 onerror="this.src='data:image/svg+xml,<svg xmlns=%22http://www.w3.org/2000/svg%22 width=%22400%22 height=%22225%22><rect fill=%22%23eee%22 width=%22400%22 height=%22225%22/><text x=%2250%25%22 y=%2250%25%22 text-anchor=%22middle%22 fill=%22%23999%22>No Image</text></svg>'">
+        </div>
+        <div class="step-content">
+            <div class="step-header">
+                <div class="step-number">{{ step.no }}</div>
+                <span class="step-time">{{ step.start }} - {{ step.end }}</span>
+            </div>
+
+            <div class="step-telop">{{ step.telop }}</div>
+
+            <div class="step-action">
+                <strong>操作:</strong> {{ step.action }}
+                {% if step.target and step.target != 'unknown' %}
+                <br><strong>対象:</strong> {{ step.target }}
+                {% endif %}
+            </div>
+
+            <div class="step-narration">
+                {{ step.narration }}
+            </div>
+
+            {% if step.caution %}
+            <div class="step-caution">
+                <strong>注意:</strong> {{ step.caution }}
+            </div>
+            {% endif %}
+        </div>
+    </div>
+    {% endfor %}
+</div>
+
+{% if steps_data.common_mistakes %}
+<div class="card">
+    <h2>よくあるミスと対処法</h2>
+    <table class="mt-4">
+        <thead>
+            <tr>
+                <th>ミス</th>
+                <th>対処法</th>
+            </tr>
+        </thead>
+        <tbody>
+            {% for item in steps_data.common_mistakes %}
+            <tr>
+                <td>{{ item.mistake }}</td>
+                <td>{{ item.fix }}</td>
+            </tr>
+            {% endfor %}
+        </tbody>
+    </table>
+</div>
+{% endif %}
+
+{% if steps_data.quiz %}
+<div class="card">
+    <h2>確認クイズ</h2>
+    {% for quiz in steps_data.quiz %}
+    <div class="mt-4" style="padding: 16px; background: #f8f9fa; border-radius: 6px; margin-bottom: 16px;">
+        <p><strong>Q{{ loop.index }}:</strong> {{ quiz.q }}</p>
+        {% if quiz.type == 'choice' %}
+        <ul style="margin-top: 8px; margin-left: 20px;">
+            {% for choice in quiz.choices %}
+            <li>{{ choice }}</li>
+            {% endfor %}
+        </ul>
+        {% endif %}
+        <details style="margin-top: 8px;">
+            <summary style="cursor: pointer; color: #667eea;">回答を表示</summary>
+            <p style="margin-top: 8px;"><strong>A:</strong> {{ quiz.a }}</p>
+        </details>
+    </div>
+    {% endfor %}
+</div>
+{% endif %}
+
+<div class="mt-4">
+    <a href="/jobs/{{ job.id }}" class="btn btn-secondary">戻る</a>
+</div>
+{% endblock %}
