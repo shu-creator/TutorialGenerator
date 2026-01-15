@@ -36,6 +36,18 @@ async def index(request: Request):
     )
 
 
+@router.get("/jobs", response_class=HTMLResponse)
+async def jobs_list(request: Request):
+    """Job list page."""
+    return templates.TemplateResponse(
+        "jobs_list.html",
+        {
+            "request": request,
+            "statuses": [s.value for s in JobStatus],
+        },
+    )
+
+
 @router.get("/jobs/{job_id}", response_class=HTMLResponse)
 async def job_detail(request: Request, job_id: str, db: Session = Depends(get_db)):
     """Job detail page."""

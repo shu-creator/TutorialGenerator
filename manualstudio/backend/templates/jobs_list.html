@@ -1,0 +1,236 @@
+{% extends "base.html" %}
+
+{% block title %}ManualStudio - ジョブ一覧{% endblock %}
+
+{% block content %}
+<div class="card">
+    <div class="flex" style="justify-content: space-between; align-items: center; margin-bottom: 1rem;">
+        <h2 style="margin: 0;">ジョブ一覧</h2>
+        <a href="/" class="btn btn-primary">新規アップロード</a>
+    </div>
+
+    <!-- Filters -->
+    <div class="flex" style="gap: 1rem; margin-bottom: 1rem; flex-wrap: wrap;">
+        <div class="form-group" style="margin-bottom: 0; flex: 1; min-width: 200px;">
+            <label for="status-filter">ステータス</label>
+            <select id="status-filter">
+                <option value="">すべて</option>
+                {% for status in statuses %}
+                <option value="{{ status }}">{{ status }}</option>
+                {% endfor %}
+            </select>
+        </div>
+        <div class="form-group" style="margin-bottom: 0; flex: 2; min-width: 300px;">
+            <label for="search-input">検索</label>
+            <input type="text" id="search-input" placeholder="タイトルまたは目的で検索...">
+        </div>
+        <div class="form-group" style="margin-bottom: 0; align-self: flex-end;">
+            <button type="button" id="search-btn" class="btn btn-primary">検索</button>
+        </div>
+    </div>
+
+    <!-- Jobs Table -->
+    <div style="overflow-x: auto;">
+        <table id="jobs-table" style="width: 100%; border-collapse: collapse;">
+            <thead>
+                <tr style="background: #f5f5f5;">
+                    <th style="padding: 0.75rem; text-align: left; border-bottom: 2px solid #ddd;">ステータス</th>
+                    <th style="padding: 0.75rem; text-align: left; border-bottom: 2px solid #ddd;">タイトル</th>
+                    <th style="padding: 0.75rem; text-align: left; border-bottom: 2px solid #ddd;">進捗</th>
+                    <th style="padding: 0.75rem; text-align: left; border-bottom: 2px solid #ddd;">作成日時</th>
+                    <th style="padding: 0.75rem; text-align: left; border-bottom: 2px solid #ddd;">アクション</th>
+                </tr>
+            </thead>
+            <tbody id="jobs-tbody">
+                <tr>
+                    <td colspan="5" style="padding: 2rem; text-align: center;">読み込み中...</td>
+                </tr>
+            </tbody>
+        </table>
+    </div>
+
+    <!-- Pagination -->
+    <div id="pagination" class="flex" style="justify-content: center; align-items: center; gap: 1rem; margin-top: 1rem;">
+        <button id="prev-btn" class="btn" disabled>前へ</button>
+        <span id="page-info">ページ 1 / 1</span>
+        <button id="next-btn" class="btn" disabled>次へ</button>
+    </div>
+</div>
+{% endblock %}
+
+{% block extra_js %}
+<script>
+let currentPage = 1;
+let totalPages = 1;
+const pageSize = 20;
+
+const statusColors = {
+    'QUEUED': '#6c757d',
+    'RUNNING': '#007bff',
+    'SUCCEEDED': '#28a745',
+    'FAILED': '#dc3545',
+    'CANCELED': '#6c757d'
+};
+
+function formatDate(isoString) {
+    if (!isoString) return '-';
+    const date = new Date(isoString);
+    return date.toLocaleString('ja-JP', {
+        year: 'numeric',
+        month: '2-digit',
+        day: '2-digit',
+        hour: '2-digit',
+        minute: '2-digit'
+    });
+}
+
+function getStatusBadge(status) {
+    const color = statusColors[status] || '#6c757d';
+    return `<span style="display: inline-block; padding: 0.25rem 0.5rem; background: ${color}; color: white; border-radius: 4px; font-size: 0.85rem;">${status}</span>`;
+}
+
+function getProgress(job) {
+    if (job.status === 'SUCCEEDED') return '100%';
+    if (job.status === 'FAILED' || job.status === 'CANCELED') return '-';
+    if (job.stage) return `${job.progress}% (${job.stage})`;
+    return `${job.progress}%`;
+}
+
+function getActions(job) {
+    const actions = [];
+    actions.push(`<a href="/jobs/${job.id}" class="btn btn-sm" style="padding: 0.25rem 0.5rem;">詳細</a>`);
+
+    if (job.status === 'QUEUED' || job.status === 'RUNNING') {
+        actions.push(`<button onclick="cancelJob('${job.id}')" class="btn btn-sm" style="padding: 0.25rem 0.5rem; background: #dc3545; color: white;">キャンセル</button>`);
+    }
+
+    if (job.status === 'FAILED') {
+        actions.push(`<button onclick="retryJob('${job.id}')" class="btn btn-sm" style="padding: 0.25rem 0.5rem; background: #ffc107; color: black;">リトライ</button>`);
+    }
+
+    return actions.join(' ');
+}
+
+async function loadJobs() {
+    const status = document.getElementById('status-filter').value;
+    const q = document.getElementById('search-input').value;
+
+    const params = new URLSearchParams({
+        page: currentPage,
+        page_size: pageSize
+    });
+    if (status) params.append('status', status);
+    if (q) params.append('q', q);
+
+    try {
+        const response = await fetch(`/api/jobs?${params}`);
+        const data = await response.json();
+
+        totalPages = data.total_pages || 1;
+        updatePagination();
+
+        const tbody = document.getElementById('jobs-tbody');
+        if (data.items.length === 0) {
+            tbody.innerHTML = '<tr><td colspan="5" style="padding: 2rem; text-align: center;">ジョブが見つかりません</td></tr>';
+            return;
+        }
+
+        tbody.innerHTML = data.items.map(job => `
+            <tr style="border-bottom: 1px solid #ddd;">
+                <td style="padding: 0.75rem;">${getStatusBadge(job.status)}</td>
+                <td style="padding: 0.75rem;">${job.title || '(無題)'}</td>
+                <td style="padding: 0.75rem;">${getProgress(job)}</td>
+                <td style="padding: 0.75rem;">${formatDate(job.created_at)}</td>
+                <td style="padding: 0.75rem;">${getActions(job)}</td>
+            </tr>
+        `).join('');
+
+    } catch (error) {
+        console.error('Failed to load jobs:', error);
+        document.getElementById('jobs-tbody').innerHTML =
+            '<tr><td colspan="5" style="padding: 2rem; text-align: center; color: red;">読み込みエラー</td></tr>';
+    }
+}
+
+function updatePagination() {
+    document.getElementById('page-info').textContent = `ページ ${currentPage} / ${totalPages}`;
+    document.getElementById('prev-btn').disabled = currentPage <= 1;
+    document.getElementById('next-btn').disabled = currentPage >= totalPages;
+}
+
+async function cancelJob(jobId) {
+    if (!confirm('このジョブをキャンセルしますか？')) return;
+
+    try {
+        const response = await fetch(`/api/jobs/${jobId}/cancel`, { method: 'POST' });
+        if (response.ok) {
+            loadJobs();
+        } else {
+            const error = await response.json();
+            alert('キャンセルに失敗: ' + (error.detail || 'Unknown error'));
+        }
+    } catch (error) {
+        alert('キャンセルに失敗: ' + error.message);
+    }
+}
+
+async function retryJob(jobId) {
+    if (!confirm('このジョブを再実行しますか？')) return;
+
+    try {
+        const response = await fetch(`/api/jobs/${jobId}/retry`, { method: 'POST' });
+        if (response.ok) {
+            loadJobs();
+        } else {
+            const error = await response.json();
+            alert('リトライに失敗: ' + (error.detail || 'Unknown error'));
+        }
+    } catch (error) {
+        alert('リトライに失敗: ' + error.message);
+    }
+}
+
+// Event listeners
+document.getElementById('search-btn').addEventListener('click', () => {
+    currentPage = 1;
+    loadJobs();
+});
+
+document.getElementById('search-input').addEventListener('keypress', (e) => {
+    if (e.key === 'Enter') {
+        currentPage = 1;
+        loadJobs();
+    }
+});
+
+document.getElementById('status-filter').addEventListener('change', () => {
+    currentPage = 1;
+    loadJobs();
+});
+
+document.getElementById('prev-btn').addEventListener('click', () => {
+    if (currentPage > 1) {
+        currentPage--;
+        loadJobs();
+    }
+});
+
+document.getElementById('next-btn').addEventListener('click', () => {
+    if (currentPage < totalPages) {
+        currentPage++;
+        loadJobs();
+    }
+});
+
+// Auto-refresh for QUEUED/RUNNING jobs
+setInterval(() => {
+    const tbody = document.getElementById('jobs-tbody');
+    if (tbody.innerHTML.includes('QUEUED') || tbody.innerHTML.includes('RUNNING')) {
+        loadJobs();
+    }
+}, 5000);
+
+// Initial load
+loadJobs();
+</script>
+{% endblock %}
