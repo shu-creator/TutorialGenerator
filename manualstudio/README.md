@@ -40,7 +40,7 @@
 - **Storage**: MinIO (S3互換)
 - **動画処理**: FFmpeg, PySceneDetect
 - **音声認識**: OpenAI Whisper API
-- **LLM**: OpenAI GPT-4o
+- **LLM**: OpenAI GPT-4o / Anthropic Claude
 - **PPTX生成**: python-pptx
 
 ## セットアップ
@@ -48,7 +48,7 @@
 ### 必要条件
 
 - Docker & Docker Compose
-- OpenAI APIキー
+- OpenAI APIキー または Anthropic APIキー
 
 ### 1. リポジトリのクローン
 
@@ -66,13 +66,47 @@ cp .env.example .env
 `.env` ファイルを編集し、必要な値を設定:
 
 ```bash
-# 必須: OpenAI APIキー
+# LLMプロバイダーの選択（openai, anthropic, mock）
+LLM_PROVIDER=openai
+
+# OpenAIを使用する場合
 OPENAI_API_KEY=sk-your-api-key-here
+
+# Anthropic Claudeを使用する場合
+# LLM_PROVIDER=anthropic
+# ANTHROPIC_API_KEY=sk-ant-your-api-key-here
+# ANTHROPIC_MODEL=claude-sonnet-4-20250514  # オプション（デフォルト）
+# ANTHROPIC_MAX_TOKENS=4000  # オプション（デフォルト）
 
 # オプション: その他の設定
 MAX_VIDEO_MINUTES=15
 MAX_VIDEO_SIZE_MB=1024
 ```
+
+### LLMプロバイダーについて
+
+ManualStudioはOpenAIとAnthropic Claudeの両方に対応しています：
+
+| プロバイダー | 設定値 | 必要なAPIキー | デフォルトモデル |
+|------------|-------|--------------|-----------------|
+| OpenAI | `openai` | `OPENAI_API_KEY` | gpt-4o |
+| Anthropic | `anthropic` | `ANTHROPIC_API_KEY` | claude-sonnet-4-20250514 |
+| Mock（テスト用） | `mock` | なし | - |
+
+**Anthropicを使う場合:**
+```bash
+# .envに以下を設定
+LLM_PROVIDER=anthropic
+ANTHROPIC_API_KEY=sk-ant-api03-xxx
+
+# オプション: 別のモデルを指定
+ANTHROPIC_MODEL=claude-opus-4-20250514
+ANTHROPIC_MAX_TOKENS=8000
+```
+
+**注意事項:**
+- CIテストではmockプロバイダーを使用するため、実APIは呼び出されません
+- 実APIでの動作確認は手動スモークテストで行ってください（後述）
 
 ### 3. 起動
 
@@ -316,8 +350,11 @@ Response: {
 | `REDIS_URL` | Redis接続URL | (docker-compose設定) |
 | `S3_ENDPOINT_URL` | S3/MinIOエンドポイント | http://minio:9000 |
 | `S3_BUCKET` | ストレージバケット名 | manualstudio |
-| `OPENAI_API_KEY` | OpenAI APIキー | (必須) |
-| `LLM_PROVIDER` | LLMプロバイダー | openai |
+| `OPENAI_API_KEY` | OpenAI APIキー | (LLM_PROVIDER=openai時必須) |
+| `ANTHROPIC_API_KEY` | Anthropic APIキー | (LLM_PROVIDER=anthropic時必須) |
+| `ANTHROPIC_MODEL` | Anthropicモデル | claude-sonnet-4-20250514 |
+| `ANTHROPIC_MAX_TOKENS` | Anthropic最大トークン数 | 4000 |
+| `LLM_PROVIDER` | LLMプロバイダー (openai/anthropic/mock) | openai |
 | `TRANSCRIBE_PROVIDER` | 文字起こしプロバイダー | openai |
 | `MAX_VIDEO_MINUTES` | 動画の最大長さ（分） | 15 |
 | `MAX_VIDEO_SIZE_MB` | 動画の最大サイズ（MB） | 1024 |
@@ -327,16 +364,21 @@ Response: {
 
 ### よくある問題
 
-#### 1. 「OPENAI_API_KEY not configured」エラー
+#### 1. 「OPENAI_API_KEY not configured」または「ANTHROPIC_API_KEY not configured」エラー
 
-`.env` ファイルに `OPENAI_API_KEY` が設定されていません。
+`.env` ファイルに使用するプロバイダーのAPIキーが設定されていません。
 
 ```bash
 # .envファイルを確認
-cat .env | grep OPENAI
+cat .env | grep -E "(OPENAI|ANTHROPIC|LLM_PROVIDER)"
 
-# 設定されていない場合は追加
+# OpenAI使用時
+echo "LLM_PROVIDER=openai" >> .env
 echo "OPENAI_API_KEY=sk-your-key-here" >> .env
+
+# Anthropic使用時
+echo "LLM_PROVIDER=anthropic" >> .env
+echo "ANTHROPIC_API_KEY=sk-ant-your-key-here" >> .env
 
 # コンテナを再起動
 docker-compose restart backend worker
@@ -464,12 +506,39 @@ docker compose -f docker-compose.yml -f docker-compose.test.yml up -d
 docker compose down
 ```
 
+#### 手動スモークテスト（実API）
+
+CIでは外部APIを呼び出しません。実APIでの動作確認は手動で行ってください：
+
+```bash
+# 1. Docker環境を起動（Anthropicの場合）
+LLM_PROVIDER=anthropic ANTHROPIC_API_KEY=sk-ant-xxx docker-compose up -d
+
+# 2. テスト用動画をアップロード
+curl -X POST http://localhost:8000/api/jobs \
+  -F "video_file=@sample.mp4" \
+  -F "title=Test" \
+  -F "goal=Testing Anthropic"
+
+# 3. ジョブ状態を確認
+curl http://localhost:8000/api/jobs/{job_id}
+
+# 4. steps.jsonを確認（llm_providerがanthropicになっていること）
+curl http://localhost:8000/api/jobs/{job_id}/steps | jq '.steps_json.source.llm_provider'
+# 期待値: "anthropic"
+```
+
+**確認ポイント:**
+- ジョブがSUCCEEDEDになること
+- `steps.json` の `source.llm_provider` が設定したプロバイダー名になっていること
+- 生成されたstepsがJSON schema準拠であること
+
 #### CI（GitHub Actions）
 
 PRを作成すると自動的にCIが実行されます：
 - Python 3.11でユニットテスト実行
 - ruffによるlint/format チェック
-- mockプロバイダーを使用（外部API不要）
+- mockプロバイダーを使用（外部API不要、実APIは呼び出されません）
 
 ローカルでCIと同じ環境を再現する場合：
 
@@ -536,10 +605,10 @@ alembic downgrade -1
 - [x] PPTX再生成機能
 - [x] バージョン履歴管理
 - [x] テーマ設定（ロゴ/カラー/フッター）
+- [x] Claude対応（Anthropic API）
 - [ ] スライドテンプレートのカスタマイズ
 - [ ] 複数言語対応の強化
 - [ ] Azure/AWS Transcribe対応
-- [ ] Claude対応（Anthropic API）
 - [ ] バッチ処理（複数動画の一括処理）
 
 ## ライセンス

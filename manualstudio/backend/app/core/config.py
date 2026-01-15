@@ -23,9 +23,12 @@ class Settings(BaseSettings):
 
     # OpenAI
     openai_api_key: str | None = None
+    openai_model: str = "gpt-4o"
 
-    # Anthropic (optional)
+    # Anthropic
     anthropic_api_key: str | None = None
+    anthropic_model: str = "claude-sonnet-4-20250514"
+    anthropic_max_tokens: int = 4000
 
     # Provider settings
     llm_provider: str = "openai"

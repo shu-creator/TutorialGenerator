@@ -201,6 +201,8 @@ class AnthropicLLMProvider(LLMProvider):
         import anthropic
 
         self.client = anthropic.Anthropic(api_key=settings.anthropic_api_key)
+        self.model = settings.anthropic_model
+        self.max_tokens = settings.anthropic_max_tokens
 
     @property
     def name(self) -> str:
@@ -209,9 +211,12 @@ class AnthropicLLMProvider(LLMProvider):
     def generate(self, prompt: str, system_prompt: str) -> str:
         """Generate response using Anthropic Claude."""
         try:
+            logger.info(
+                f"Calling Anthropic API with model={self.model}, max_tokens={self.max_tokens}"
+            )
             message = self.client.messages.create(
-                model="claude-sonnet-4-20250514",
-                max_tokens=4000,
+                model=self.model,
+                max_tokens=self.max_tokens,
                 system=system_prompt,
                 messages=[{"role": "user", "content": prompt}],
             )
