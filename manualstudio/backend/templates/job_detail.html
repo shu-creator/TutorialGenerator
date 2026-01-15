@@ -72,12 +72,18 @@
 
 <div class="card">
     <h2>ダウンロード</h2>
-    <div class="flex mt-4">
+    <div class="flex mt-4" style="flex-wrap: wrap; gap: 0.5rem;">
         <a href="/api/jobs/{{ job.id }}/download/pptx" class="btn btn-primary">
-            PowerPoint (.pptx) をダウンロード
+            PowerPoint (.pptx)
+        </a>
+        <a href="/api/jobs/{{ job.id }}/download/markdown" class="btn btn-secondary">
+            Markdown (.md)
+        </a>
+        <a href="/api/jobs/{{ job.id }}/download/html" class="btn btn-secondary">
+            HTML (.html)
         </a>
         <a href="/api/jobs/{{ job.id }}/download/frames" class="btn btn-secondary">
-            フレーム画像 (.zip) をダウンロード
+            フレーム画像 (.zip)
         </a>
     </div>
 </div>

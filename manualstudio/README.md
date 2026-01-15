@@ -164,9 +164,19 @@ http://localhost:8000/jobs でジョブ一覧を確認・管理できます:
 
 ### 4. 結果のダウンロード
 
-処理完了後、以下をダウンロードできます:
-- **PPTX**: PowerPointスライド
+処理完了後、以下の形式でダウンロードできます:
+- **PPTX**: PowerPointスライド（プレゼンテーション用）
+- **Markdown (.md)**: テキスト形式のマニュアル（Notion/GitHub/Confluence向け）
+- **HTML (.html)**: スタンドアロンのWebページ（メール添付/社内ポータル向け）
 - **frames.zip**: 抽出されたフレーム画像
+
+**用途別おすすめ形式:**
+| 用途 | 推奨形式 |
+|------|---------|
+| プレゼンテーション/研修 | PPTX |
+| ナレッジベース（Notion等）| Markdown |
+| メール添付/Webポータル | HTML |
+| 画像の再利用 | frames.zip |
 
 ### 5. 手順の編集とPPTX再生成
 
@@ -340,6 +350,37 @@ GET /api/jobs/{job_id}/download/pptx
 
 Response: Redirect to presigned URL
 ```
+
+### Markdownダウンロード
+```
+GET /api/jobs/{job_id}/download/markdown
+
+Content-Type: text/markdown; charset=utf-8
+Content-Disposition: attachment; filename*=UTF-8''...
+
+Response: Markdown形式のマニュアルテキスト
+```
+
+**出力内容:**
+- タイトル、目的
+- 全ステップ（番号、テロップ、操作説明、注意事項）
+- よくある間違いと対処法
+- 確認クイズ
+
+### HTMLダウンロード
+```
+GET /api/jobs/{job_id}/download/html
+
+Content-Type: text/html; charset=utf-8
+Content-Disposition: attachment; filename*=UTF-8''...
+
+Response: 完全なHTMLドキュメント（CSS含む、スタンドアロン）
+```
+
+**特徴:**
+- スタンドアロンHTMLファイル（外部依存なし）
+- レスポンシブデザイン
+- XSS対策済み（全ユーザー入力をエスケープ）
 
 ### テーマ取得
 ```
@@ -643,9 +684,12 @@ ruff format app/ tests/ --check
 | `tests/conftest.py` | pytest フィクスチャ（テストDB、モックストレージ、クライアント）|
 | `tests/test_e2e.py` | E2Eスモークテスト |
 | `tests/test_api_steps.py` | Steps API のユニットテスト |
+| `tests/test_jobs_api.py` | ジョブ一覧/バッチ/キャンセル/リトライのテスト |
+| `tests/test_export.py` | Markdown/HTMLエクスポートのテスト（XSS防止含む）|
 | `tests/test_pptx_regeneration.py` | PPTX再生成のテスト |
 | `tests/test_security.py` | セキュリティ回帰テスト |
 | `tests/test_theme.py` | テーマ設定のテスト |
+| `tests/test_llm_provider.py` | LLMプロバイダー選択のテスト |
 | `tests/test_utils.py` | ユーティリティ関数のテスト |
 | `tests/fixtures/` | テスト用フィクスチャデータ |
 
@@ -692,9 +736,24 @@ alembic downgrade -1
 - [x] ジョブ一覧・検索・フィルタ
 - [x] バッチ処理（複数動画の一括処理）
 - [x] ジョブキャンセル・リトライ
+- [x] エクスポート拡充（Markdown/HTML）
+- [ ] SRTエクスポート（字幕ファイル）※後述
 - [ ] スライドテンプレートのカスタマイズ
 - [ ] 複数言語対応の強化
 - [ ] Azure/AWS Transcribe対応
+
+### SRTエクスポートについて
+
+現在、SRT（字幕）エクスポートは未実装です。理由と今後の計画：
+
+**見送り理由:**
+- 現在のパイプラインでは、transcript segments（タイムスタンプ付きの文字起こしデータ）がジョブ完了後に保存されていない
+- steps.jsonにはステップ単位の時間範囲はあるが、単語レベルのタイムスタンプは含まれていない
+
+**実装ロードマップ:**
+1. transcript segmentsのDB/Storage保存を追加（パイプライン変更）
+2. GET /api/jobs/{job_id}/download/srt エンドポイントを追加
+3. ステップのナレーションをSRT形式に変換するロジック実装
 
 ## ライセンス
 

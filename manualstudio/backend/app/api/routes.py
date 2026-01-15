@@ -10,7 +10,7 @@ from typing import Literal
 from urllib.parse import quote
 
 from fastapi import APIRouter, Depends, File, Form, HTTPException, Query, UploadFile
-from fastapi.responses import JSONResponse, RedirectResponse
+from fastapi.responses import JSONResponse, RedirectResponse, Response
 from pydantic import BaseModel
 from sqlalchemy import or_
 from sqlalchemy.orm import Session
@@ -27,6 +27,7 @@ from app.schemas.theme import (
     ThemeUpdate,
     merge_theme_with_defaults,
 )
+from app.services.export import generate_html, generate_markdown
 from app.services.llm import LLMValidationError, validate_steps_json
 from app.services.storage import get_storage_service
 from app.workers.celery_app import celery_app
@@ -726,6 +727,120 @@ async def get_frame(job_id: str, frame_file: str, db: Session = Depends(get_db))
     except Exception as e:
         logger.error(f"Failed to get frame: {e}")
         raise HTTPException(status_code=404, detail="Frame not found")
+
+
+@router.get("/jobs/{job_id}/download/markdown")
+async def download_markdown(job_id: str, db: Session = Depends(get_db)):
+    """
+    Download steps as Markdown document.
+
+    Generates Markdown on-demand from steps.json.
+    """
+    try:
+        job_uuid = uuid.UUID(job_id)
+    except ValueError:
+        raise HTTPException(status_code=400, detail="Invalid job ID format")
+
+    job = db.query(Job).filter(Job.id == job_uuid).first()
+    if not job:
+        raise HTTPException(status_code=404, detail="Job not found")
+
+    if job.status != JobStatus.SUCCEEDED:
+        raise HTTPException(
+            status_code=400,
+            detail=f"Cannot download from job in {job.status.value} status. Job must be SUCCEEDED.",
+        )
+
+    # Get steps data
+    steps_version = (
+        db.query(StepsVersion)
+        .filter(StepsVersion.job_id == job_uuid, StepsVersion.version == job.current_steps_version)
+        .first()
+    )
+
+    if not steps_version:
+        # Fallback to storage
+        if not job.steps_json_uri:
+            raise HTTPException(status_code=404, detail="Steps not yet generated")
+        try:
+            storage = get_storage_service()
+            key = storage.key_from_uri(job.steps_json_uri)
+            content = storage.download_bytes(key)
+            steps_data = json.loads(content)
+        except Exception as e:
+            logger.error(f"Failed to download steps.json: {e}")
+            raise HTTPException(status_code=500, detail="Failed to retrieve steps")
+    else:
+        steps_data = steps_version.steps_json
+
+    # Generate Markdown
+    markdown_content = generate_markdown(steps_data)
+
+    filename = job.title or "manual"
+    return Response(
+        content=markdown_content,
+        media_type="text/markdown; charset=utf-8",
+        headers={
+            "Content-Disposition": _build_content_disposition(f"{filename}.md"),
+        },
+    )
+
+
+@router.get("/jobs/{job_id}/download/html")
+async def download_html(job_id: str, db: Session = Depends(get_db)):
+    """
+    Download steps as HTML document.
+
+    Generates HTML on-demand from steps.json with XSS protection.
+    """
+    try:
+        job_uuid = uuid.UUID(job_id)
+    except ValueError:
+        raise HTTPException(status_code=400, detail="Invalid job ID format")
+
+    job = db.query(Job).filter(Job.id == job_uuid).first()
+    if not job:
+        raise HTTPException(status_code=404, detail="Job not found")
+
+    if job.status != JobStatus.SUCCEEDED:
+        raise HTTPException(
+            status_code=400,
+            detail=f"Cannot download from job in {job.status.value} status. Job must be SUCCEEDED.",
+        )
+
+    # Get steps data
+    steps_version = (
+        db.query(StepsVersion)
+        .filter(StepsVersion.job_id == job_uuid, StepsVersion.version == job.current_steps_version)
+        .first()
+    )
+
+    if not steps_version:
+        # Fallback to storage
+        if not job.steps_json_uri:
+            raise HTTPException(status_code=404, detail="Steps not yet generated")
+        try:
+            storage = get_storage_service()
+            key = storage.key_from_uri(job.steps_json_uri)
+            content = storage.download_bytes(key)
+            steps_data = json.loads(content)
+        except Exception as e:
+            logger.error(f"Failed to download steps.json: {e}")
+            raise HTTPException(status_code=500, detail="Failed to retrieve steps")
+    else:
+        steps_data = steps_version.steps_json
+
+    # Generate HTML (with XSS protection)
+    html_content = generate_html(steps_data)
+
+    filename = job.title or "manual"
+    return Response(
+        content=html_content,
+        media_type="text/html; charset=utf-8",
+        headers={
+            "Content-Disposition": _build_content_disposition(f"{filename}.html"),
+        },
+    )
 
 
 @router.post("/jobs/{job_id}/cancel")
