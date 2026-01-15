@@ -64,6 +64,19 @@ let currentPage = 1;
 let totalPages = 1;
 const pageSize = 20;
 
+// Escape HTML to prevent XSS
+function escapeHtml(text) {
+    if (text === null || text === undefined) {
+        return '';
+    }
+    return String(text)
+        .replace(/&/g, '&amp;')
+        .replace(/</g, '&lt;')
+        .replace(/>/g, '&gt;')
+        .replace(/"/g, '&quot;')
+        .replace(/'/g, '&#039;');
+}
+
 const statusColors = {
     'QUEUED': '#6c757d',
     'RUNNING': '#007bff',
@@ -138,7 +151,7 @@ async function loadJobs() {
         tbody.innerHTML = data.items.map(job => `
             <tr style="border-bottom: 1px solid #ddd;">
                 <td style="padding: 0.75rem;">${getStatusBadge(job.status)}</td>
-                <td style="padding: 0.75rem;">${job.title || '(無題)'}</td>
+                <td style="padding: 0.75rem;">${escapeHtml(job.title) || '(無題)'}</td>
                 <td style="padding: 0.75rem;">${getProgress(job)}</td>
                 <td style="padding: 0.75rem;">${formatDate(job.created_at)}</td>
                 <td style="padding: 0.75rem;">${getActions(job)}</td>
