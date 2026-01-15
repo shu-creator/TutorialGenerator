@@ -1,5 +1,7 @@
 """Transcription service with provider abstraction."""
 
+from __future__ import annotations
+
 import json
 import os
 from abc import ABC, abstractmethod
