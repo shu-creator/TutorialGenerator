@@ -1,16 +1,15 @@
 """LLM service for generating steps.json."""
+
 import json
 import os
 from abc import ABC, abstractmethod
-from functools import lru_cache
 from pathlib import Path
-from typing import Optional
 
 import jsonschema
 
 from app.core.config import get_settings
+from app.core.exceptions import ErrorCode, LLMError, LLMValidationError
 from app.core.logging import get_logger
-from app.core.exceptions import LLMError, LLMValidationError, ErrorCode
 
 logger = get_logger(__name__)
 
@@ -34,14 +33,24 @@ STEPS_JSON_SCHEMA = {
                 "video_fps": {"type": "number"},
                 "resolution": {"type": "string"},
                 "transcription_provider": {"type": "string"},
-                "llm_provider": {"type": "string"}
-            }
+                "llm_provider": {"type": "string"},
+            },
         },
         "steps": {
             "type": "array",
             "items": {
                 "type": "object",
-                "required": ["no", "start", "end", "shot", "frame_file", "telop", "action", "target", "narration"],
+                "required": [
+                    "no",
+                    "start",
+                    "end",
+                    "shot",
+                    "frame_file",
+                    "telop",
+                    "action",
+                    "target",
+                    "narration",
+                ],
                 "properties": {
                     "no": {"type": "integer", "minimum": 1},
                     "start": {"type": "string", "pattern": "^[0-9]{2}:[0-9]{2}$"},
@@ -52,20 +61,17 @@ STEPS_JSON_SCHEMA = {
                     "action": {"type": "string"},
                     "target": {"type": "string"},
                     "narration": {"type": "string"},
-                    "caution": {"type": "string"}
-                }
-            }
+                    "caution": {"type": "string"},
+                },
+            },
         },
         "common_mistakes": {
             "type": "array",
             "items": {
                 "type": "object",
                 "required": ["mistake", "fix"],
-                "properties": {
-                    "mistake": {"type": "string"},
-                    "fix": {"type": "string"}
-                }
-            }
+                "properties": {"mistake": {"type": "string"}, "fix": {"type": "string"}},
+            },
         },
         "quiz": {
             "type": "array",
@@ -76,11 +82,11 @@ STEPS_JSON_SCHEMA = {
                     "type": {"type": "string", "enum": ["choice", "text"]},
                     "q": {"type": "string"},
                     "choices": {"type": "array", "items": {"type": "string"}},
-                    "a": {"type": "string"}
-                }
-            }
-        }
-    }
+                    "a": {"type": "string"},
+                },
+            },
+        },
+    },
 }
 
 
@@ -154,12 +160,10 @@ class OpenAILLMProvider(LLMProvider):
     def __init__(self):
         settings = get_settings()
         if not settings.openai_api_key:
-            raise LLMError(
-                "OPENAI_API_KEY not configured",
-                ErrorCode.LLM_PROVIDER_ERROR.value
-            )
+            raise LLMError("OPENAI_API_KEY not configured", ErrorCode.LLM_PROVIDER_ERROR.value)
 
         from openai import OpenAI
+
         self.client = OpenAI(api_key=settings.openai_api_key)
 
     @property
@@ -173,20 +177,17 @@ class OpenAILLMProvider(LLMProvider):
                 model="gpt-4o",
                 messages=[
                     {"role": "system", "content": system_prompt},
-                    {"role": "user", "content": prompt}
+                    {"role": "user", "content": prompt},
                 ],
                 temperature=0.3,
                 max_tokens=4000,
-                response_format={"type": "json_object"}
+                response_format={"type": "json_object"},
             )
             return response.choices[0].message.content
 
         except Exception as e:
             logger.error(f"OpenAI API call failed: {e}")
-            raise LLMError(
-                f"OpenAI API call failed: {e}",
-                ErrorCode.LLM_PROVIDER_ERROR.value
-            )
+            raise LLMError(f"OpenAI API call failed: {e}", ErrorCode.LLM_PROVIDER_ERROR.value)
 
 
 class AnthropicLLMProvider(LLMProvider):
@@ -195,12 +196,10 @@ class AnthropicLLMProvider(LLMProvider):
     def __init__(self):
         settings = get_settings()
         if not settings.anthropic_api_key:
-            raise LLMError(
-                "ANTHROPIC_API_KEY not configured",
-                ErrorCode.LLM_PROVIDER_ERROR.value
-            )
+            raise LLMError("ANTHROPIC_API_KEY not configured", ErrorCode.LLM_PROVIDER_ERROR.value)
 
         import anthropic
+
         self.client = anthropic.Anthropic(api_key=settings.anthropic_api_key)
 
     @property
@@ -214,24 +213,19 @@ class AnthropicLLMProvider(LLMProvider):
                 model="claude-sonnet-4-20250514",
                 max_tokens=4000,
                 system=system_prompt,
-                messages=[
-                    {"role": "user", "content": prompt}
-                ]
+                messages=[{"role": "user", "content": prompt}],
             )
             return message.content[0].text
 
         except Exception as e:
             logger.error(f"Anthropic API call failed: {e}")
-            raise LLMError(
-                f"Anthropic API call failed: {e}",
-                ErrorCode.LLM_PROVIDER_ERROR.value
-            )
+            raise LLMError(f"Anthropic API call failed: {e}", ErrorCode.LLM_PROVIDER_ERROR.value)
 
 
 class MockLLMProvider(LLMProvider):
     """Mock provider for testing - loads from fixture file."""
 
-    def __init__(self, fixture_path: Optional[str] = None):
+    def __init__(self, fixture_path: str | None = None):
         """
         Initialize mock provider.
 
@@ -250,7 +244,7 @@ class MockLLMProvider(LLMProvider):
 
         try:
             if os.path.exists(self.fixture_path):
-                with open(self.fixture_path, "r", encoding="utf-8") as f:
+                with open(self.fixture_path, encoding="utf-8") as f:
                     data = json.load(f)
                     logger.info(f"Loaded steps from fixture: {len(data.get('steps', []))} steps")
                     return json.dumps(data, ensure_ascii=False)
@@ -258,39 +252,42 @@ class MockLLMProvider(LLMProvider):
             logger.warning(f"Failed to load fixture, using default: {e}")
 
         # Fallback to hardcoded mock data
-        return json.dumps({
-            "title": "テスト手順書",
-            "goal": "テスト用のサンプル",
-            "language": "ja",
-            "source": {
-                "video_duration_sec": 30,
-                "video_fps": 30,
-                "resolution": "1920x1080",
-                "transcription_provider": "mock",
-                "llm_provider": "mock"
+        return json.dumps(
+            {
+                "title": "テスト手順書",
+                "goal": "テスト用のサンプル",
+                "language": "ja",
+                "source": {
+                    "video_duration_sec": 30,
+                    "video_fps": 30,
+                    "resolution": "1920x1080",
+                    "transcription_provider": "mock",
+                    "llm_provider": "mock",
+                },
+                "steps": [
+                    {
+                        "no": 1,
+                        "start": "00:00",
+                        "end": "00:10",
+                        "shot": "00:05",
+                        "frame_file": "step_001.png",
+                        "telop": "開始",
+                        "action": "アプリケーションを起動します",
+                        "target": "アプリアイコン",
+                        "narration": "まず、アプリケーションを起動してください。",
+                    }
+                ],
+                "common_mistakes": [],
+                "quiz": [],
             },
-            "steps": [
-                {
-                    "no": 1,
-                    "start": "00:00",
-                    "end": "00:10",
-                    "shot": "00:05",
-                    "frame_file": "step_001.png",
-                    "telop": "開始",
-                    "action": "アプリケーションを起動します",
-                    "target": "アプリアイコン",
-                    "narration": "まず、アプリケーションを起動してください。"
-                }
-            ],
-            "common_mistakes": [],
-            "quiz": []
-        }, ensure_ascii=False)
+            ensure_ascii=False,
+        )
 
 
 class LLMService:
     """LLM service for generating steps.json."""
 
-    def __init__(self, provider: Optional[str] = None):
+    def __init__(self, provider: str | None = None):
         settings = get_settings()
         provider_name = provider or settings.llm_provider
 
@@ -302,8 +299,7 @@ class LLMService:
             self._provider = MockLLMProvider()
         else:
             raise LLMError(
-                f"Unknown LLM provider: {provider_name}",
-                ErrorCode.LLM_PROVIDER_ERROR.value
+                f"Unknown LLM provider: {provider_name}", ErrorCode.LLM_PROVIDER_ERROR.value
             )
 
     @property
@@ -319,7 +315,7 @@ class LLMService:
         candidate_frames: list[dict],
         video_info: dict,
         transcription_provider: str,
-        max_retries: int = 1
+        max_retries: int = 1,
     ) -> dict:
         """
         Generate steps.json from transcript and frame candidates.
@@ -339,8 +335,13 @@ class LLMService:
         """
         # Build user prompt
         prompt = self._build_prompt(
-            title, goal, language, transcript_segments,
-            candidate_frames, video_info, transcription_provider
+            title,
+            goal,
+            language,
+            transcript_segments,
+            candidate_frames,
+            video_info,
+            transcription_provider,
         )
 
         # Try to generate and validate
@@ -386,7 +387,7 @@ class LLMService:
         transcript_segments: list[dict],
         candidate_frames: list[dict],
         video_info: dict,
-        transcription_provider: str
+        transcription_provider: str,
     ) -> str:
         """Build the user prompt for LLM."""
         # Format transcript
@@ -474,6 +475,6 @@ def validate_steps_json(data: dict) -> None:
         raise LLMValidationError(f"Schema validation failed: {e.message}")
 
 
-def get_llm_service(provider: Optional[str] = None) -> LLMService:
+def get_llm_service(provider: str | None = None) -> LLMService:
     """Get LLM service instance."""
     return LLMService(provider)

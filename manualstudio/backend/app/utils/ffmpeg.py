@@ -1,12 +1,12 @@
 """FFmpeg utilities for video processing."""
-import json
-import subprocess
-import os
-from dataclasses import dataclass
-from typing import Optional
 
-from app.core.logging import get_logger
+import json
+import os
+import subprocess
+from dataclasses import dataclass
+
 from app.core.exceptions import FFmpegError
+from app.core.logging import get_logger
 
 logger = get_logger(__name__)
 
@@ -14,6 +14,7 @@ logger = get_logger(__name__)
 @dataclass
 class VideoInfo:
     """Video metadata."""
+
     duration_sec: float
     fps: float
     width: int
@@ -40,19 +41,16 @@ def probe_video(video_path: str) -> VideoInfo:
     try:
         cmd = [
             "ffprobe",
-            "-v", "quiet",
-            "-print_format", "json",
+            "-v",
+            "quiet",
+            "-print_format",
+            "json",
             "-show_format",
             "-show_streams",
-            video_path
+            video_path,
         ]
 
-        result = subprocess.run(
-            cmd,
-            capture_output=True,
-            text=True,
-            timeout=30
-        )
+        result = subprocess.run(cmd, capture_output=True, text=True, timeout=30)
 
         if result.returncode != 0:
             raise FFmpegError(f"ffprobe failed: {result.stderr}")
@@ -101,7 +99,7 @@ def probe_video(video_path: str) -> VideoInfo:
             resolution=f"{width}x{height}",
             has_audio=has_audio,
             codec=video_stream.get("codec_name", "unknown"),
-            file_size_bytes=file_size
+            file_size_bytes=file_size,
         )
 
     except subprocess.TimeoutExpired:
@@ -115,10 +113,7 @@ def probe_video(video_path: str) -> VideoInfo:
 
 
 def extract_audio(
-    video_path: str,
-    output_path: str,
-    sample_rate: int = 16000,
-    channels: int = 1
+    video_path: str, output_path: str, sample_rate: int = 16000, channels: int = 1
 ) -> str:
     """
     Extract audio from video file.
@@ -141,12 +136,16 @@ def extract_audio(
         cmd = [
             "ffmpeg",
             "-y",  # Overwrite output
-            "-i", video_path,
+            "-i",
+            video_path,
             "-vn",  # No video
-            "-acodec", "pcm_s16le",
-            "-ar", str(sample_rate),
-            "-ac", str(channels),
-            output_path
+            "-acodec",
+            "pcm_s16le",
+            "-ar",
+            str(sample_rate),
+            "-ac",
+            str(channels),
+            output_path,
         ]
 
         logger.info(f"Extracting audio from {video_path}")
@@ -155,7 +154,7 @@ def extract_audio(
             cmd,
             capture_output=True,
             text=True,
-            timeout=300  # 5 minutes timeout
+            timeout=300,  # 5 minutes timeout
         )
 
         if result.returncode != 0:
@@ -176,11 +175,7 @@ def extract_audio(
 
 
 def extract_frame(
-    video_path: str,
-    output_path: str,
-    time_sec: float,
-    width: Optional[int] = 1280,
-    quality: int = 2
+    video_path: str, output_path: str, time_sec: float, width: int | None = 1280, quality: int = 2
 ) -> str:
     """
     Extract a single frame from video.
@@ -204,26 +199,21 @@ def extract_frame(
         cmd = [
             "ffmpeg",
             "-y",
-            "-ss", str(time_sec),
-            "-i", video_path,
-            "-vframes", "1",
+            "-ss",
+            str(time_sec),
+            "-i",
+            video_path,
+            "-vframes",
+            "1",
         ]
 
         # Add scaling if width specified
         if width:
             cmd.extend(["-vf", f"scale={width}:-1"])
 
-        cmd.extend([
-            "-q:v", str(quality),
-            output_path
-        ])
+        cmd.extend(["-q:v", str(quality), output_path])
 
-        result = subprocess.run(
-            cmd,
-            capture_output=True,
-            text=True,
-            timeout=30
-        )
+        result = subprocess.run(cmd, capture_output=True, text=True, timeout=30)
 
         if result.returncode != 0:
             raise FFmpegError(f"ffmpeg frame extraction failed: {result.stderr}")
@@ -245,8 +235,8 @@ def extract_frames_batch(
     video_path: str,
     output_dir: str,
     times_sec: list[float],
-    width: Optional[int] = 1280,
-    filename_prefix: str = "frame"
+    width: int | None = 1280,
+    filename_prefix: str = "frame",
 ) -> list[str]:
     """
     Extract multiple frames from video.
@@ -265,7 +255,7 @@ def extract_frames_batch(
     paths = []
 
     for i, time_sec in enumerate(times_sec):
-        output_path = os.path.join(output_dir, f"{filename_prefix}_{i+1:03d}.png")
+        output_path = os.path.join(output_dir, f"{filename_prefix}_{i + 1:03d}.png")
         extract_frame(video_path, output_path, time_sec, width)
         paths.append(output_path)
 

@@ -1,28 +1,30 @@
 """API routes for ManualStudio."""
+
 import json
 import os
 import uuid
 from datetime import datetime
-from typing import Optional
 from urllib.parse import quote
 
-from fastapi import APIRouter, Depends, File, Form, HTTPException, UploadFile, Body
+from fastapi import APIRouter, Depends, File, Form, HTTPException, UploadFile
 from fastapi.responses import JSONResponse, RedirectResponse
 from pydantic import BaseModel
 from sqlalchemy.orm import Session
 
 from app.core.config import get_settings
-from app.core.logging import get_logger, set_trace_id, get_trace_id
-from app.core.exceptions import (
-    VideoTooLargeError,
-    VideoTooLongError,
-    UnsupportedFormatError,
-    JobNotFoundError,
-    ErrorCode,
+from app.core.exceptions import ErrorCode
+from app.core.logging import get_logger, set_trace_id
+from app.db import Job, JobStatus, StepsVersion, get_db
+from app.schemas.theme import (
+    ALLOWED_LOGO_CONTENT_TYPES,
+    ALLOWED_LOGO_EXTENSIONS,
+    MAX_LOGO_SIZE_BYTES,
+    Theme,
+    ThemeUpdate,
+    merge_theme_with_defaults,
 )
-from app.db import get_db, Job, JobStatus, StepsVersion
+from app.services.llm import LLMValidationError, validate_steps_json
 from app.services.storage import get_storage_service
-from app.services.llm import validate_steps_json, LLMValidationError
 from app.workers.celery_app import celery_app
 
 logger = get_logger(__name__)
@@ -32,8 +34,9 @@ settings = get_settings()
 
 class StepsUpdateRequest(BaseModel):
     """Request body for updating steps."""
+
     steps_json: dict
-    edit_note: Optional[str] = None
+    edit_note: str | None = None
 
 
 def _build_content_disposition(filename: str) -> str:
@@ -44,8 +47,8 @@ def _build_content_disposition(filename: str) -> str:
 @router.post("/jobs")
 async def create_job(
     video_file: UploadFile = File(...),
-    title: Optional[str] = Form(None),
-    goal: Optional[str] = Form(None),
+    title: str | None = Form(None),
+    goal: str | None = Form(None),
     language: str = Form("ja"),
     db: Session = Depends(get_db),
 ):
@@ -68,7 +71,7 @@ async def create_job(
     if ext not in [".mp4", ".mov", ".avi", ".mkv", ".webm"]:
         raise HTTPException(
             status_code=400,
-            detail=f"Unsupported video format: {ext}. Supported: mp4, mov, avi, mkv, webm"
+            detail=f"Unsupported video format: {ext}. Supported: mp4, mov, avi, mkv, webm",
         )
 
     # Check file size
@@ -80,7 +83,7 @@ async def create_job(
     if file_size > max_size:
         raise HTTPException(
             status_code=400,
-            detail=f"Video file too large ({file_size / 1024 / 1024:.1f}MB). Maximum: {max_size / 1024 / 1024:.0f}MB"
+            detail=f"Video file too large ({file_size / 1024 / 1024:.1f}MB). Maximum: {max_size / 1024 / 1024:.0f}MB",
         )
 
     # Create job record
@@ -111,9 +114,7 @@ async def create_job(
     # Queue the processing task
     try:
         celery_app.send_task(
-            "app.workers.tasks.process_video",
-            args=[str(job_id)],
-            task_id=str(job_id)
+            "app.workers.tasks.process_video", args=[str(job_id)], task_id=str(job_id)
         )
     except Exception as e:
         logger.error(f"Failed to queue job {job_id}: {e}")
@@ -135,8 +136,8 @@ async def create_job(
         content={
             "job_id": str(job_id),
             "status": job.status.value,
-            "message": "Job created and queued for processing"
-        }
+            "message": "Job created and queued for processing",
+        },
     )
 
 
@@ -193,11 +194,7 @@ async def get_job(job_id: str, db: Session = Depends(get_db)):
 
 
 @router.get("/jobs/{job_id}/steps")
-async def get_job_steps(
-    job_id: str,
-    version: Optional[int] = None,
-    db: Session = Depends(get_db)
-):
+async def get_job_steps(job_id: str, version: int | None = None, db: Session = Depends(get_db)):
     """
     Get steps.json for a job.
 
@@ -215,16 +212,19 @@ async def get_job_steps(
 
     # Try to get from steps_versions first
     target_version = version or job.current_steps_version
-    steps_version = db.query(StepsVersion).filter(
-        StepsVersion.job_id == job_uuid,
-        StepsVersion.version == target_version
-    ).first()
+    steps_version = (
+        db.query(StepsVersion)
+        .filter(StepsVersion.job_id == job_uuid, StepsVersion.version == target_version)
+        .first()
+    )
 
     if steps_version:
         return {
             "version": steps_version.version,
             "edit_source": steps_version.edit_source,
-            "created_at": steps_version.created_at.isoformat() if steps_version.created_at else None,
+            "created_at": steps_version.created_at.isoformat()
+            if steps_version.created_at
+            else None,
             "steps_json": steps_version.steps_json,
         }
 
@@ -247,11 +247,7 @@ async def get_job_steps(
 
 
 @router.put("/jobs/{job_id}/steps")
-async def update_job_steps(
-    job_id: str,
-    request: StepsUpdateRequest,
-    db: Session = Depends(get_db)
-):
+async def update_job_steps(job_id: str, request: StepsUpdateRequest, db: Session = Depends(get_db)):
     """
     Update steps.json for a job.
 
@@ -272,7 +268,7 @@ async def update_job_steps(
     if job.status != JobStatus.SUCCEEDED:
         raise HTTPException(
             status_code=400,
-            detail=f"Cannot edit steps for job in {job.status.value} status. Job must be SUCCEEDED."
+            detail=f"Cannot edit steps for job in {job.status.value} status. Job must be SUCCEEDED.",
         )
 
     # Validate steps.json schema
@@ -281,16 +277,11 @@ async def update_job_steps(
     except LLMValidationError as e:
         raise HTTPException(
             status_code=400,
-            detail={
-                "error_code": ErrorCode.STEPS_SCHEMA_INVALID.value,
-                "message": str(e)
-            }
+            detail={"error_code": ErrorCode.STEPS_SCHEMA_INVALID.value, "message": str(e)},
         )
 
     # Get current max version
-    max_version = db.query(StepsVersion).filter(
-        StepsVersion.job_id == job_uuid
-    ).count()
+    max_version = db.query(StepsVersion).filter(StepsVersion.job_id == job_uuid).count()
     new_version = max_version + 1
 
     # Create new steps version
@@ -328,7 +319,7 @@ async def update_job_steps(
     return {
         "job_id": str(job_id),
         "version": new_version,
-        "message": "Steps updated successfully. Use /regenerate/pptx to regenerate the PowerPoint."
+        "message": "Steps updated successfully. Use /regenerate/pptx to regenerate the PowerPoint.",
     }
 
 
@@ -353,7 +344,7 @@ async def regenerate_pptx(job_id: str, db: Session = Depends(get_db)):
     if job.status != JobStatus.SUCCEEDED:
         raise HTTPException(
             status_code=400,
-            detail=f"Cannot regenerate PPTX for job in {job.status.value} status. Job must be SUCCEEDED."
+            detail=f"Cannot regenerate PPTX for job in {job.status.value} status. Job must be SUCCEEDED.",
         )
 
     if not job.frames_prefix_uri:
@@ -376,11 +367,7 @@ async def regenerate_pptx(job_id: str, db: Session = Depends(get_db)):
 
     # Queue the PPTX regeneration task
     task_id = f"{job_id}-pptx-{trace_id}"
-    celery_app.send_task(
-        "app.workers.tasks.regenerate_pptx",
-        args=[str(job_id)],
-        task_id=task_id
-    )
+    celery_app.send_task("app.workers.tasks.regenerate_pptx", args=[str(job_id)], task_id=task_id)
 
     logger.info(f"PPTX regeneration queued for job {job_id}")
 
@@ -388,7 +375,7 @@ async def regenerate_pptx(job_id: str, db: Session = Depends(get_db)):
         "job_id": str(job_id),
         "status": "RUNNING",
         "task_id": task_id,
-        "message": "PPTX regeneration started"
+        "message": "PPTX regeneration started",
     }
 
 
@@ -404,9 +391,12 @@ async def get_steps_versions(job_id: str, db: Session = Depends(get_db)):
     if not job:
         raise HTTPException(status_code=404, detail="Job not found")
 
-    versions = db.query(StepsVersion).filter(
-        StepsVersion.job_id == job_uuid
-    ).order_by(StepsVersion.version.desc()).all()
+    versions = (
+        db.query(StepsVersion)
+        .filter(StepsVersion.job_id == job_uuid)
+        .order_by(StepsVersion.version.desc())
+        .all()
+    )
 
     return {
         "job_id": str(job_id),
@@ -419,7 +409,7 @@ async def get_steps_versions(job_id: str, db: Session = Depends(get_db)):
                 "edit_note": v.edit_note,
             }
             for v in versions
-        ]
+        ],
     }
 
 
@@ -446,7 +436,7 @@ async def download_pptx(job_id: str, db: Session = Depends(get_db)):
             key,
             expires_in=3600,
             response_content_type="application/vnd.openxmlformats-officedocument.presentationml.presentation",
-            response_content_disposition=_build_content_disposition(f"{filename}.pptx")
+            response_content_disposition=_build_content_disposition(f"{filename}.pptx"),
         )
         return RedirectResponse(url=url)
     except Exception as e:
@@ -477,7 +467,7 @@ async def download_frames(job_id: str, db: Session = Depends(get_db)):
         try:
             # Check if zip already exists
             storage.client.head_object(Bucket=storage.bucket, Key=zip_key)
-        except:
+        except Exception:
             # Create zip
             frames_prefix = storage.key_from_uri(job.frames_prefix_uri)
             zip_key = storage.create_frames_zip(str(job_id), frames_prefix)
@@ -487,7 +477,7 @@ async def download_frames(job_id: str, db: Session = Depends(get_db)):
             zip_key,
             expires_in=3600,
             response_content_type="application/zip",
-            response_content_disposition=_build_content_disposition(f"{filename}.zip")
+            response_content_disposition=_build_content_disposition(f"{filename}.zip"),
         )
         return RedirectResponse(url=url)
     except Exception as e:
@@ -520,9 +510,7 @@ async def get_frame(job_id: str, frame_file: str, db: Session = Depends(get_db))
         frame_key = f"{frames_prefix}{normalized_frame}"
 
         url = storage.get_presigned_url(
-            frame_key,
-            expires_in=3600,
-            response_content_type="image/png"
+            frame_key, expires_in=3600, response_content_type="image/png"
         )
         return RedirectResponse(url=url)
     except Exception as e:
@@ -544,8 +532,7 @@ async def cancel_job(job_id: str, db: Session = Depends(get_db)):
 
     if job.status not in [JobStatus.QUEUED, JobStatus.RUNNING]:
         raise HTTPException(
-            status_code=400,
-            detail=f"Cannot cancel job in {job.status.value} status"
+            status_code=400, detail=f"Cannot cancel job in {job.status.value} status"
         )
 
     # Revoke Celery task
@@ -557,3 +544,193 @@ async def cancel_job(job_id: str, db: Session = Depends(get_db)):
     logger.info(f"Job canceled: {job_id}")
 
     return {"job_id": str(job_id), "status": "CANCELED"}
+
+
+@router.get("/jobs/{job_id}/theme")
+async def get_job_theme(job_id: str, db: Session = Depends(get_db)):
+    """
+    Get theme settings for a job.
+
+    Returns default theme if no custom theme is set.
+    """
+    try:
+        job_uuid = uuid.UUID(job_id)
+    except ValueError:
+        raise HTTPException(status_code=400, detail="Invalid job ID format")
+
+    job = db.query(Job).filter(Job.id == job_uuid).first()
+    if not job:
+        raise HTTPException(status_code=404, detail="Job not found")
+
+    theme = merge_theme_with_defaults(job.theme_json)
+    return theme.model_dump()
+
+
+@router.put("/jobs/{job_id}/theme")
+async def update_job_theme(job_id: str, theme_update: ThemeUpdate, db: Session = Depends(get_db)):
+    """
+    Update theme settings for a job.
+
+    Only updates provided fields, preserving existing values for others.
+    Does NOT regenerate PPTX - use /regenerate/pptx for that.
+    """
+    try:
+        job_uuid = uuid.UUID(job_id)
+    except ValueError:
+        raise HTTPException(status_code=400, detail="Invalid job ID format")
+
+    job = db.query(Job).filter(Job.id == job_uuid).first()
+    if not job:
+        raise HTTPException(status_code=404, detail="Job not found")
+
+    if job.status != JobStatus.SUCCEEDED:
+        raise HTTPException(
+            status_code=400,
+            detail=f"Cannot update theme for job in {job.status.value} status. Job must be SUCCEEDED.",
+        )
+
+    # Get current theme or defaults
+    current_theme = merge_theme_with_defaults(job.theme_json)
+
+    # Update only provided fields
+    update_data = theme_update.model_dump(exclude_unset=True)
+    updated_theme_dict = current_theme.model_dump()
+    updated_theme_dict.update(update_data)
+
+    # Validate the merged theme
+    try:
+        updated_theme = Theme(**updated_theme_dict)
+    except ValueError as e:
+        raise HTTPException(status_code=422, detail=str(e))
+
+    # Save to database
+    job.theme_json = updated_theme.model_dump()
+    job.updated_at = datetime.utcnow()
+    db.commit()
+
+    logger.info(f"Theme updated for job {job_id}")
+
+    return {
+        "job_id": str(job_id),
+        "theme": updated_theme.model_dump(),
+        "message": "Theme updated successfully. Use /regenerate/pptx to apply changes to PPTX.",
+    }
+
+
+@router.post("/jobs/{job_id}/theme/logo")
+async def upload_job_logo(
+    job_id: str, logo_file: UploadFile = File(...), db: Session = Depends(get_db)
+):
+    """
+    Upload logo image for a job.
+
+    - Accepts PNG/JPG files only
+    - Maximum file size: 1MB
+    - Saves to jobs/<job_id>/assets/logo.<ext>
+    - Updates theme_json.logo_uri
+    """
+    try:
+        job_uuid = uuid.UUID(job_id)
+    except ValueError:
+        raise HTTPException(status_code=400, detail="Invalid job ID format")
+
+    job = db.query(Job).filter(Job.id == job_uuid).first()
+    if not job:
+        raise HTTPException(status_code=404, detail="Job not found")
+
+    if job.status != JobStatus.SUCCEEDED:
+        raise HTTPException(
+            status_code=400,
+            detail=f"Cannot upload logo for job in {job.status.value} status. Job must be SUCCEEDED.",
+        )
+
+    # Validate file extension
+    filename = logo_file.filename or "logo.png"
+    ext = os.path.splitext(filename)[1].lower()
+    if ext not in ALLOWED_LOGO_EXTENSIONS:
+        raise HTTPException(
+            status_code=400,
+            detail=f"Unsupported file format: {ext}. Allowed: {', '.join(ALLOWED_LOGO_EXTENSIONS)}",
+        )
+
+    # Validate content type
+    content_type = logo_file.content_type or ""
+    if content_type not in ALLOWED_LOGO_CONTENT_TYPES:
+        raise HTTPException(
+            status_code=400,
+            detail=f"Unsupported content type: {content_type}. Allowed: {', '.join(ALLOWED_LOGO_CONTENT_TYPES)}",
+        )
+
+    # Check file size
+    logo_file.file.seek(0, 2)
+    file_size = logo_file.file.tell()
+    logo_file.file.seek(0)
+
+    if file_size > MAX_LOGO_SIZE_BYTES:
+        raise HTTPException(
+            status_code=400,
+            detail=f"Logo file too large ({file_size / 1024:.1f}KB). Maximum: {MAX_LOGO_SIZE_BYTES / 1024:.0f}KB",
+        )
+
+    # Upload to storage
+    try:
+        storage = get_storage_service()
+        logo_key = f"jobs/{job_id}/assets/logo{ext}"
+        storage.upload_file(logo_file.file, logo_key, content_type)
+        logo_uri = f"s3://{settings.s3_bucket}/{logo_key}"
+    except Exception as e:
+        logger.error(f"Failed to upload logo: {e}")
+        raise HTTPException(status_code=500, detail="Failed to upload logo")
+
+    # Update theme with logo_uri
+    current_theme = merge_theme_with_defaults(job.theme_json)
+    updated_theme_dict = current_theme.model_dump()
+    updated_theme_dict["logo_uri"] = logo_uri
+    updated_theme = Theme(**updated_theme_dict)
+
+    job.theme_json = updated_theme.model_dump()
+    job.updated_at = datetime.utcnow()
+    db.commit()
+
+    logger.info(f"Logo uploaded for job {job_id}: {logo_key}")
+
+    return {
+        "job_id": str(job_id),
+        "logo_uri": logo_uri,
+        "message": "Logo uploaded successfully. Use /regenerate/pptx to apply to PPTX.",
+    }
+
+
+@router.get("/jobs/{job_id}/theme/logo")
+async def get_job_logo(job_id: str, db: Session = Depends(get_db)):
+    """
+    Get logo image for a job.
+
+    Returns a redirect to the presigned URL for the logo image.
+    """
+    try:
+        job_uuid = uuid.UUID(job_id)
+    except ValueError:
+        raise HTTPException(status_code=400, detail="Invalid job ID format")
+
+    job = db.query(Job).filter(Job.id == job_uuid).first()
+    if not job:
+        raise HTTPException(status_code=404, detail="Job not found")
+
+    theme = merge_theme_with_defaults(job.theme_json)
+    if not theme.logo_uri:
+        raise HTTPException(status_code=404, detail="No logo configured for this job")
+
+    try:
+        storage = get_storage_service()
+        logo_key = storage.key_from_uri(theme.logo_uri)
+        ext = os.path.splitext(logo_key)[1].lower()
+        content_type = "image/png" if ext == ".png" else "image/jpeg"
+
+        url = storage.get_presigned_url(
+            logo_key, expires_in=3600, response_content_type=content_type
+        )
+        return RedirectResponse(url=url)
+    except Exception as e:
+        logger.error(f"Failed to get logo: {e}")
+        raise HTTPException(status_code=404, detail="Logo not found")

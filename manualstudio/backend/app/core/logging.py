@@ -1,14 +1,14 @@
 """Logging configuration."""
+
 import logging
 import sys
 import uuid
 from contextvars import ContextVar
-from typing import Optional
 
 from .config import get_settings
 
 # Context variable for trace ID
-trace_id_var: ContextVar[Optional[str]] = ContextVar("trace_id", default=None)
+trace_id_var: ContextVar[str | None] = ContextVar("trace_id", default=None)
 
 
 def get_trace_id() -> str:
@@ -44,7 +44,7 @@ def setup_logging() -> None:
     # Create formatter
     formatter = TraceFormatter(
         fmt="%(asctime)s [%(levelname)s] [%(trace_id)s] %(name)s: %(message)s",
-        datefmt="%Y-%m-%d %H:%M:%S"
+        datefmt="%Y-%m-%d %H:%M:%S",
     )
 
     # Configure root logger

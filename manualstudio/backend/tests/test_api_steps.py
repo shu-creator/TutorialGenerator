@@ -1,10 +1,10 @@
 """Tests for steps API endpoints (PUT /api/jobs/{job_id}/steps)."""
-import json
+
 import uuid
 
 import pytest
 
-from app.db.models import Job, JobStatus, StepsVersion
+from app.db.models import JobStatus, StepsVersion
 
 
 class TestGetJobSteps:
@@ -28,11 +28,7 @@ class TestGetJobSteps:
             "title": "Updated Manual",
             "goal": "Updated goal",
             "language": "ja",
-            "source": {
-                "video_duration_sec": 60.0,
-                "video_fps": 30.0,
-                "resolution": "1920x1080"
-            },
+            "source": {"video_duration_sec": 60.0, "video_fps": 30.0, "resolution": "1920x1080"},
             "steps": [
                 {
                     "no": 1,
@@ -43,16 +39,16 @@ class TestGetJobSteps:
                     "telop": "新しいステップ",
                     "action": "更新された操作",
                     "target": "更新対象",
-                    "narration": "更新されたナレーションです。"
+                    "narration": "更新されたナレーションです。",
                 }
-            ]
+            ],
         }
         steps_version = StepsVersion(
             job_id=succeeded_job.id,
             version=2,
             steps_json=new_steps,
             edit_source="manual",
-            edit_note="Manual edit"
+            edit_note="Manual edit",
         )
         test_db_session.add(steps_version)
         succeeded_job.current_steps_version = 2
@@ -86,7 +82,9 @@ class TestGetJobSteps:
 class TestUpdateJobSteps:
     """Tests for PUT /api/jobs/{job_id}/steps endpoint."""
 
-    def test_update_steps_success(self, client, test_db_session, succeeded_job, steps_fixture, mock_storage):
+    def test_update_steps_success(
+        self, client, test_db_session, succeeded_job, steps_fixture, mock_storage
+    ):
         """Test successful steps update."""
         # Modify steps
         updated_steps = steps_fixture.copy()
@@ -95,7 +93,7 @@ class TestUpdateJobSteps:
 
         response = client.put(
             f"/api/jobs/{succeeded_job.id}/steps",
-            json={"steps_json": updated_steps, "edit_note": "Test edit"}
+            json={"steps_json": updated_steps, "edit_note": "Test edit"},
         )
 
         assert response.status_code == 200
@@ -108,10 +106,11 @@ class TestUpdateJobSteps:
         assert succeeded_job.current_steps_version == 2
 
         # Verify new version was created
-        new_version = test_db_session.query(StepsVersion).filter(
-            StepsVersion.job_id == succeeded_job.id,
-            StepsVersion.version == 2
-        ).first()
+        new_version = (
+            test_db_session.query(StepsVersion)
+            .filter(StepsVersion.job_id == succeeded_job.id, StepsVersion.version == 2)
+            .first()
+        )
         assert new_version is not None
         assert new_version.edit_source == "manual"
         assert new_version.edit_note == "Test edit"
@@ -125,8 +124,7 @@ class TestUpdateJobSteps:
         }
 
         response = client.put(
-            f"/api/jobs/{succeeded_job.id}/steps",
-            json={"steps_json": invalid_steps}
+            f"/api/jobs/{succeeded_job.id}/steps", json={"steps_json": invalid_steps}
         )
 
         assert response.status_code == 400
@@ -140,8 +138,7 @@ class TestUpdateJobSteps:
         invalid_steps["steps"][0]["start"] = "invalid"
 
         response = client.put(
-            f"/api/jobs/{succeeded_job.id}/steps",
-            json={"steps_json": invalid_steps}
+            f"/api/jobs/{succeeded_job.id}/steps", json={"steps_json": invalid_steps}
         )
 
         assert response.status_code == 400
@@ -152,18 +149,11 @@ class TestUpdateJobSteps:
             "title": "Test",
             "goal": "Test",
             "language": "ja",
-            "source": {
-                "video_duration_sec": 60.0,
-                "video_fps": 30.0,
-                "resolution": "1920x1080"
-            },
-            "steps": []
+            "source": {"video_duration_sec": 60.0, "video_fps": 30.0, "resolution": "1920x1080"},
+            "steps": [],
         }
 
-        response = client.put(
-            f"/api/jobs/{sample_job.id}/steps",
-            json={"steps_json": valid_steps}
-        )
+        response = client.put(f"/api/jobs/{sample_job.id}/steps", json={"steps_json": valid_steps})
 
         assert response.status_code == 400
         assert "SUCCEEDED" in response.json()["detail"]
@@ -171,10 +161,7 @@ class TestUpdateJobSteps:
     def test_update_steps_job_not_found(self, client):
         """Test 404 when job doesn't exist."""
         fake_id = str(uuid.uuid4())
-        response = client.put(
-            f"/api/jobs/{fake_id}/steps",
-            json={"steps_json": {}}
-        )
+        response = client.put(f"/api/jobs/{fake_id}/steps", json={"steps_json": {}})
         assert response.status_code == 404
 
 
@@ -189,7 +176,7 @@ class TestGetStepsVersions:
             version=2,
             steps_json=steps_fixture,
             edit_source="manual",
-            edit_note="Second edit"
+            edit_note="Second edit",
         )
         test_db_session.add(steps_version)
         succeeded_job.current_steps_version = 2
@@ -215,11 +202,15 @@ class TestGetStepsVersions:
 class TestRegeneratePptx:
     """Tests for POST /api/jobs/{job_id}/regenerate/pptx endpoint."""
 
-    def test_regenerate_pptx_queues_task(self, client, test_db_session, succeeded_job, mock_storage):
+    def test_regenerate_pptx_queues_task(
+        self, client, test_db_session, succeeded_job, mock_storage
+    ):
         """Test that PPTX regeneration queues a task."""
         with pytest.MonkeyPatch.context() as mp:
             # Mock Celery send_task
-            mock_send_task = lambda *args, **kwargs: None
+            def mock_send_task(*args, **kwargs):
+                return None
+
             mp.setattr("app.api.routes.celery_app.send_task", mock_send_task)
 
             response = client.post(f"/api/jobs/{succeeded_job.id}/regenerate/pptx")

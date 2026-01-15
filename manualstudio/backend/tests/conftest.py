@@ -1,23 +1,22 @@
 """Pytest fixtures for ManualStudio tests."""
+
 import json
-import os
 import tempfile
 import uuid
+from collections.abc import Generator
 from pathlib import Path
-from typing import Generator
 from unittest.mock import MagicMock, patch
 
 import pytest
 from fastapi.testclient import TestClient
 from sqlalchemy import create_engine
-from sqlalchemy.orm import sessionmaker, Session
+from sqlalchemy.orm import Session, sessionmaker
 from sqlalchemy.pool import StaticPool
 
 from app.core.config import Settings
 from app.db.database import Base, get_db
 from app.db.models import Job, JobStatus, StepsVersion
 from app.main import app
-from app.services.storage import StorageService
 
 # Path to fixtures directory
 FIXTURES_DIR = Path(__file__).parent / "fixtures"
@@ -26,6 +25,7 @@ FIXTURES_DIR = Path(__file__).parent / "fixtures"
 # ============================================================================
 # Test Settings
 # ============================================================================
+
 
 @pytest.fixture(scope="session")
 def test_settings():
@@ -47,6 +47,7 @@ def test_settings():
 # ============================================================================
 # Database Fixtures
 # ============================================================================
+
 
 @pytest.fixture(scope="function")
 def test_db_engine():
@@ -75,17 +76,20 @@ def test_db_session(test_db_engine) -> Generator[Session, None, None]:
 @pytest.fixture(scope="function")
 def override_get_db(test_db_session):
     """Override the get_db dependency for testing."""
+
     def _override_get_db():
         try:
             yield test_db_session
         finally:
             pass
+
     return _override_get_db
 
 
 # ============================================================================
 # Mock Storage Service
 # ============================================================================
+
 
 class MockStorageService:
     """Mock storage service for testing."""
@@ -97,7 +101,7 @@ class MockStorageService:
 
     def upload_file(self, file_obj, key: str, content_type: str = None):
         """Upload file to mock storage."""
-        if hasattr(file_obj, 'read'):
+        if hasattr(file_obj, "read"):
             self._storage[key] = file_obj.read()
             file_obj.seek(0)
         else:
@@ -147,6 +151,7 @@ def mock_storage():
 # Test Client
 # ============================================================================
 
+
 @pytest.fixture(scope="function")
 def client(override_get_db, mock_storage, test_settings) -> Generator[TestClient, None, None]:
     """Create test client with mocked dependencies."""
@@ -154,9 +159,11 @@ def client(override_get_db, mock_storage, test_settings) -> Generator[TestClient
     app.dependency_overrides[get_db] = override_get_db
 
     # Patch settings and storage
-    with patch("app.core.config.get_settings", return_value=test_settings), \
-         patch("app.services.storage.get_storage_service", return_value=mock_storage), \
-         patch("app.api.routes.get_storage_service", return_value=mock_storage):
+    with (
+        patch("app.core.config.get_settings", return_value=test_settings),
+        patch("app.services.storage.get_storage_service", return_value=mock_storage),
+        patch("app.api.routes.get_storage_service", return_value=mock_storage),
+    ):
         with TestClient(app) as test_client:
             yield test_client
 
@@ -166,6 +173,7 @@ def client(override_get_db, mock_storage, test_settings) -> Generator[TestClient
 # ============================================================================
 # Job Fixtures
 # ============================================================================
+
 
 @pytest.fixture
 def sample_job(test_db_session) -> Job:
@@ -224,10 +232,11 @@ def succeeded_job(test_db_session) -> Job:
 # Fixture Data Loaders
 # ============================================================================
 
+
 def load_fixture(filename: str) -> dict:
     """Load a fixture file."""
     fixture_path = FIXTURES_DIR / filename
-    with open(fixture_path, "r", encoding="utf-8") as f:
+    with open(fixture_path, encoding="utf-8") as f:
         return json.load(f)
 
 
@@ -246,6 +255,7 @@ def steps_fixture() -> dict:
 # ============================================================================
 # Temp Files
 # ============================================================================
+
 
 @pytest.fixture
 def temp_dir():

@@ -1,10 +1,10 @@
 """End-to-end smoke tests for ManualStudio."""
-import json
+
 import uuid
 
 import pytest
 
-from app.db.models import Job, JobStatus, StepsVersion
+from app.db.models import JobStatus
 
 
 class TestHealthCheck:
@@ -78,7 +78,9 @@ class TestSucceededJobFlow:
         assert "steps_json" in data
         assert data["steps_json"]["title"] == steps_fixture["title"]
 
-    def test_full_edit_flow(self, client, test_db_session, succeeded_job, steps_fixture, mock_storage):
+    def test_full_edit_flow(
+        self, client, test_db_session, succeeded_job, steps_fixture, mock_storage
+    ):
         """Test complete edit flow: get steps -> edit -> save -> verify."""
         # Step 1: Get current steps
         response = client.get(f"/api/jobs/{succeeded_job.id}/steps")
@@ -94,10 +96,7 @@ class TestSucceededJobFlow:
         # Step 3: Save modified steps
         response = client.put(
             f"/api/jobs/{succeeded_job.id}/steps",
-            json={
-                "steps_json": modified_steps,
-                "edit_note": "E2E test edit"
-            }
+            json={"steps_json": modified_steps, "edit_note": "E2E test edit"},
         )
         assert response.status_code == 200
         assert response.json()["version"] == 2
@@ -127,8 +126,7 @@ class TestSucceededJobFlow:
         invalid_steps["steps"][0]["start"] = "invalid-format"  # Should be MM:SS
 
         response = client.put(
-            f"/api/jobs/{succeeded_job.id}/steps",
-            json={"steps_json": invalid_steps}
+            f"/api/jobs/{succeeded_job.id}/steps", json={"steps_json": invalid_steps}
         )
         assert response.status_code == 400
 
@@ -139,10 +137,7 @@ class TestSucceededJobFlow:
 
     def test_download_pptx_redirects(self, client, succeeded_job, mock_storage):
         """Test PPTX download returns redirect."""
-        response = client.get(
-            f"/api/jobs/{succeeded_job.id}/download/pptx",
-            follow_redirects=False
-        )
+        response = client.get(f"/api/jobs/{succeeded_job.id}/download/pptx", follow_redirects=False)
         # Should redirect to presigned URL
         assert response.status_code == 307
 
@@ -150,15 +145,16 @@ class TestSucceededJobFlow:
 class TestEditAndRegenerateFlow:
     """E2E tests for the complete edit + regenerate PPTX flow."""
 
-    def test_edit_and_queue_regeneration(self, client, test_db_session, succeeded_job, steps_fixture, mock_storage):
+    def test_edit_and_queue_regeneration(
+        self, client, test_db_session, succeeded_job, steps_fixture, mock_storage
+    ):
         """Test editing steps and queueing PPTX regeneration."""
         # Step 1: Edit steps
         modified_steps = steps_fixture.copy()
         modified_steps["title"] = "Regeneration Test Manual"
 
         response = client.put(
-            f"/api/jobs/{succeeded_job.id}/steps",
-            json={"steps_json": modified_steps}
+            f"/api/jobs/{succeeded_job.id}/steps", json={"steps_json": modified_steps}
         )
         assert response.status_code == 200
         new_version = response.json()["version"]
@@ -196,7 +192,17 @@ class TestMockProviders:
 
         # Verify step structure
         step = steps_fixture["steps"][0]
-        required_fields = ["no", "start", "end", "shot", "frame_file", "telop", "action", "target", "narration"]
+        required_fields = [
+            "no",
+            "start",
+            "end",
+            "shot",
+            "frame_file",
+            "telop",
+            "action",
+            "target",
+            "narration",
+        ]
         for field in required_fields:
             assert field in step, f"Missing required field: {field}"
 
@@ -212,10 +218,7 @@ class TestAPIValidation:
 
     def test_empty_steps_json(self, client, succeeded_job):
         """Test rejection of empty steps_json."""
-        response = client.put(
-            f"/api/jobs/{succeeded_job.id}/steps",
-            json={"steps_json": {}}
-        )
+        response = client.put(f"/api/jobs/{succeeded_job.id}/steps", json={"steps_json": {}})
         assert response.status_code == 400
 
     def test_steps_with_missing_required_fields(self, client, succeeded_job):
@@ -228,7 +231,6 @@ class TestAPIValidation:
         }
 
         response = client.put(
-            f"/api/jobs/{succeeded_job.id}/steps",
-            json={"steps_json": incomplete_steps}
+            f"/api/jobs/{succeeded_job.id}/steps", json={"steps_json": incomplete_steps}
         )
         assert response.status_code == 400

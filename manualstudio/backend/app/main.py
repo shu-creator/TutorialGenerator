@@ -1,14 +1,13 @@
 """FastAPI application entry point."""
+
 from fastapi import FastAPI, Request
 from fastapi.responses import JSONResponse
-from fastapi.staticfiles import StaticFiles
-from fastapi.templating import Jinja2Templates
 
-from app.core.config import get_settings
-from app.core.logging import setup_logging, get_logger
-from app.core.exceptions import ManualStudioError
 from app.api.routes import router as api_router
 from app.api.views import router as views_router
+from app.core.config import get_settings
+from app.core.exceptions import ManualStudioError
+from app.core.logging import get_logger, setup_logging
 
 # Setup logging
 setup_logging()
@@ -38,7 +37,7 @@ async def manualstudio_exception_handler(request: Request, exc: ManualStudioErro
         content={
             "error": exc.code,
             "message": exc.message,
-        }
+        },
     )
 
 

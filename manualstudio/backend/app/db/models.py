@@ -1,9 +1,10 @@
 """Database models."""
+
 import uuid
 from datetime import datetime
 from enum import Enum as PyEnum
 
-from sqlalchemy import Column, String, Integer, Text, DateTime, Enum, Float, JSON, ForeignKey
+from sqlalchemy import JSON, Column, DateTime, Enum, Float, ForeignKey, Integer, String, Text
 from sqlalchemy.dialects.postgresql import UUID
 from sqlalchemy.orm import relationship
 
@@ -12,6 +13,7 @@ from .database import Base
 
 class JobStatus(str, PyEnum):
     """Job status enumeration."""
+
     QUEUED = "QUEUED"
     RUNNING = "RUNNING"
     SUCCEEDED = "SUCCEEDED"
@@ -21,6 +23,7 @@ class JobStatus(str, PyEnum):
 
 class JobStage(str, PyEnum):
     """Job processing stage enumeration."""
+
     INGEST = "INGEST"
     EXTRACT_AUDIO = "EXTRACT_AUDIO"
     TRANSCRIBE = "TRANSCRIBE"
@@ -72,13 +75,18 @@ class Job(Base):
     # Steps version tracking
     current_steps_version = Column(Integer, default=1, nullable=False)
 
+    # Theme configuration (JSON)
+    theme_json = Column(JSON, nullable=True)
+
     # Error handling
     error_code = Column(String(100), nullable=True)
     error_message = Column(Text, nullable=True)
     trace_id = Column(String(50), nullable=True)
 
     # Relationships
-    steps_versions = relationship("StepsVersion", back_populates="job", order_by="StepsVersion.version")
+    steps_versions = relationship(
+        "StepsVersion", back_populates="job", order_by="StepsVersion.version"
+    )
 
     def to_dict(self) -> dict:
         """Convert model to dictionary."""
@@ -103,7 +111,7 @@ class Job(Base):
                 "steps_json": self.steps_json_uri is not None,
                 "pptx": self.pptx_uri is not None,
                 "frames": self.frames_prefix_uri is not None,
-            }
+            },
         }
 
     def get_current_steps_version(self) -> "StepsVersion":

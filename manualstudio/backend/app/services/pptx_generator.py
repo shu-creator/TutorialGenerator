@@ -1,16 +1,33 @@
 """PPTX generation service."""
+
 import os
 from io import BytesIO
-from typing import Optional
 
 from pptx import Presentation
-from pptx.util import Inches, Pt
 from pptx.dml.color import RGBColor
-from pptx.enum.text import PP_ALIGN, MSO_ANCHOR
+from pptx.enum.text import PP_ALIGN
+from pptx.util import Inches, Pt
 
 from app.core.logging import get_logger
+from app.schemas.theme import Theme, get_default_theme
 
 logger = get_logger(__name__)
+
+
+def hex_to_rgb(hex_color: str) -> RGBColor:
+    """Convert hex color string to RGBColor.
+
+    Args:
+        hex_color: Hex color string (e.g., "#667EEA")
+
+    Returns:
+        RGBColor object
+    """
+    hex_color = hex_color.lstrip("#")
+    r = int(hex_color[0:2], 16)
+    g = int(hex_color[2:4], 16)
+    b = int(hex_color[4:6], 16)
+    return RGBColor(r, g, b)
 
 
 class PPTXGenerator:
@@ -24,7 +41,9 @@ class PPTXGenerator:
         self,
         steps_data: dict,
         frame_paths: dict[str, str],
-        output_path: Optional[str] = None
+        output_path: str | None = None,
+        theme: Theme | None = None,
+        logo_path: str | None = None,
     ) -> bytes:
         """
         Generate PPTX from steps data.
@@ -33,34 +52,40 @@ class PPTXGenerator:
             steps_data: steps.json data
             frame_paths: Dict mapping frame_file to local file path
             output_path: Optional path to save PPTX
+            theme: Optional Theme object for customization
+            logo_path: Optional local path to logo image file
 
         Returns:
             PPTX file as bytes
         """
         logger.info("Generating PPTX")
 
+        # Use default theme if not provided
+        if theme is None:
+            theme = get_default_theme()
+
         prs = Presentation()
         prs.slide_width = self.slide_width
         prs.slide_height = self.slide_height
 
         # Add title slide
-        self._add_title_slide(prs, steps_data)
+        self._add_title_slide(prs, steps_data, theme, logo_path)
 
         # Add step slides
         for step in steps_data.get("steps", []):
             frame_file = step.get("frame_file", "")
             frame_path = frame_paths.get(frame_file)
-            self._add_step_slide(prs, step, frame_path)
+            self._add_step_slide(prs, step, frame_path, theme, logo_path)
 
         # Add common mistakes slide if present
         mistakes = steps_data.get("common_mistakes", [])
         if mistakes:
-            self._add_mistakes_slide(prs, mistakes)
+            self._add_mistakes_slide(prs, mistakes, theme, logo_path)
 
         # Add quiz slides if present
         quizzes = steps_data.get("quiz", [])
         for quiz in quizzes:
-            self._add_quiz_slide(prs, quiz)
+            self._add_quiz_slide(prs, quiz, theme, logo_path)
 
         # Save to bytes
         buffer = BytesIO()
@@ -77,13 +102,58 @@ class PPTXGenerator:
         logger.info(f"PPTX generated: {len(steps_data.get('steps', []))} step slides")
         return pptx_bytes
 
-    def _add_title_slide(self, prs: Presentation, steps_data: dict) -> None:
+    def _add_logo_to_slide(self, slide, logo_path: str | None, theme: Theme) -> None:
+        """Add logo to top-right corner of slide if enabled."""
+        if not theme.show_logo or not logo_path or not os.path.exists(logo_path):
+            return
+
+        try:
+            # Position in top-right corner
+            logo_width = Inches(1.2)
+            logo_left = self.slide_width - logo_width - Inches(0.3)
+            logo_top = Inches(0.2)
+
+            slide.shapes.add_picture(logo_path, logo_left, logo_top, width=logo_width)
+        except Exception as e:
+            logger.warning(f"Failed to add logo to slide: {e}")
+
+    def _add_footer_to_slide(self, slide, theme: Theme) -> None:
+        """Add footer text to bottom of slide if enabled."""
+        if not theme.show_footer or not theme.footer_text:
+            return
+
+        try:
+            footer_left = Inches(0.5)
+            footer_top = self.slide_height - Inches(0.5)
+            footer_width = self.slide_width - Inches(1)
+            footer_height = Inches(0.4)
+
+            footer_box = slide.shapes.add_textbox(
+                footer_left, footer_top, footer_width, footer_height
+            )
+            tf = footer_box.text_frame
+            p = tf.paragraphs[0]
+            p.text = theme.footer_text
+            p.font.size = Pt(10)
+            p.font.color.rgb = RGBColor(128, 128, 128)
+            p.alignment = PP_ALIGN.CENTER
+        except Exception as e:
+            logger.warning(f"Failed to add footer to slide: {e}")
+
+    def _add_title_slide(
+        self,
+        prs: Presentation,
+        steps_data: dict,
+        theme: Theme,
+        logo_path: str | None,
+    ) -> None:
         """Add title slide."""
         slide_layout = prs.slide_layouts[6]  # Blank layout
         slide = prs.slides.add_slide(slide_layout)
 
         title = steps_data.get("title", "操作マニュアル")
         goal = steps_data.get("goal", "")
+        primary_color = hex_to_rgb(theme.primary_color)
 
         # Title text box
         left = Inches(0.5)
@@ -99,6 +169,7 @@ class PPTXGenerator:
         p.text = title
         p.font.size = Pt(44)
         p.font.bold = True
+        p.font.color.rgb = primary_color
         p.alignment = PP_ALIGN.CENTER
 
         # Goal text box
@@ -114,11 +185,17 @@ class PPTXGenerator:
             p.font.size = Pt(24)
             p.alignment = PP_ALIGN.CENTER
 
+        # Add logo and footer
+        self._add_logo_to_slide(slide, logo_path, theme)
+        self._add_footer_to_slide(slide, theme)
+
     def _add_step_slide(
         self,
         prs: Presentation,
         step: dict,
-        frame_path: Optional[str]
+        frame_path: str | None,
+        theme: Theme,
+        logo_path: str | None,
     ) -> None:
         """Add a step slide."""
         slide_layout = prs.slide_layouts[6]  # Blank layout
@@ -131,6 +208,7 @@ class PPTXGenerator:
         caution = step.get("caution", "")
         narration = step.get("narration", "")
         time_range = f"{step.get('start', '00:00')} - {step.get('end', '00:00')}"
+        primary_color = hex_to_rgb(theme.primary_color)
 
         # Title
         title_left = Inches(0.5)
@@ -144,6 +222,7 @@ class PPTXGenerator:
         p.text = f"Step {step_no}: {telop}"
         p.font.size = Pt(32)
         p.font.bold = True
+        p.font.color.rgb = primary_color
 
         # Image (left side)
         if frame_path and os.path.exists(frame_path):
@@ -199,10 +278,21 @@ class PPTXGenerator:
             notes_tf = notes_slide.notes_text_frame
             notes_tf.text = narration
 
-    def _add_mistakes_slide(self, prs: Presentation, mistakes: list) -> None:
+        # Add logo and footer
+        self._add_logo_to_slide(slide, logo_path, theme)
+        self._add_footer_to_slide(slide, theme)
+
+    def _add_mistakes_slide(
+        self,
+        prs: Presentation,
+        mistakes: list,
+        theme: Theme,
+        logo_path: str | None,
+    ) -> None:
         """Add common mistakes slide."""
         slide_layout = prs.slide_layouts[6]
         slide = prs.slides.add_slide(slide_layout)
+        primary_color = hex_to_rgb(theme.primary_color)
 
         # Title
         title_box = slide.shapes.add_textbox(Inches(0.5), Inches(0.3), Inches(12.333), Inches(0.8))
@@ -211,9 +301,12 @@ class PPTXGenerator:
         p.text = "よくあるミスと対処法"
         p.font.size = Pt(32)
         p.font.bold = True
+        p.font.color.rgb = primary_color
 
         # Content
-        content_box = slide.shapes.add_textbox(Inches(0.5), Inches(1.3), Inches(12.333), Inches(5.5))
+        content_box = slide.shapes.add_textbox(
+            Inches(0.5), Inches(1.3), Inches(12.333), Inches(5.5)
+        )
         tf = content_box.text_frame
         tf.word_wrap = True
 
@@ -236,10 +329,21 @@ class PPTXGenerator:
             p.font.size = Pt(16)
             p.space_before = Pt(4)
 
-    def _add_quiz_slide(self, prs: Presentation, quiz: dict) -> None:
+        # Add logo and footer
+        self._add_logo_to_slide(slide, logo_path, theme)
+        self._add_footer_to_slide(slide, theme)
+
+    def _add_quiz_slide(
+        self,
+        prs: Presentation,
+        quiz: dict,
+        theme: Theme,
+        logo_path: str | None,
+    ) -> None:
         """Add quiz slide."""
         slide_layout = prs.slide_layouts[6]
         slide = prs.slides.add_slide(slide_layout)
+        primary_color = hex_to_rgb(theme.primary_color)
 
         quiz_type = quiz.get("type", "text")
         question = quiz.get("q", "")
@@ -253,6 +357,7 @@ class PPTXGenerator:
         p.text = "確認クイズ"
         p.font.size = Pt(32)
         p.font.bold = True
+        p.font.color.rgb = primary_color
 
         # Question
         q_box = slide.shapes.add_textbox(Inches(0.5), Inches(1.5), Inches(12.333), Inches(1.5))
@@ -278,3 +383,7 @@ class PPTXGenerator:
         notes_slide = slide.notes_slide
         notes_tf = notes_slide.notes_text_frame
         notes_tf.text = f"正解: {answer}"
+
+        # Add logo and footer
+        self._add_logo_to_slide(slide, logo_path, theme)
+        self._add_footer_to_slide(slide, theme)

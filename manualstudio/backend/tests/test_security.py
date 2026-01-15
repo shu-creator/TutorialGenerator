@@ -1,7 +1,6 @@
 """Security regression tests for ManualStudio."""
-import uuid
 
-import pytest
+import uuid
 
 
 class TestPathTraversal:
@@ -76,8 +75,7 @@ class TestInputValidation:
         oversized_steps["steps"] = [steps_fixture["steps"][0].copy() for _ in range(1000)]
 
         response = client.put(
-            f"/api/jobs/{succeeded_job.id}/steps",
-            json={"steps_json": oversized_steps}
+            f"/api/jobs/{succeeded_job.id}/steps", json={"steps_json": oversized_steps}
         )
         # Should either accept or return a meaningful error (not crash)
         assert response.status_code in [200, 400, 413]
@@ -98,8 +96,7 @@ class TestAuthorizationBoundaries:
     def test_cannot_edit_non_succeeded_job(self, client, sample_job, steps_fixture):
         """Test that we cannot edit a job that hasn't succeeded."""
         response = client.put(
-            f"/api/jobs/{sample_job.id}/steps",
-            json={"steps_json": steps_fixture}
+            f"/api/jobs/{sample_job.id}/steps", json={"steps_json": steps_fixture}
         )
         assert response.status_code == 400
         assert "SUCCEEDED" in response.json()["detail"]

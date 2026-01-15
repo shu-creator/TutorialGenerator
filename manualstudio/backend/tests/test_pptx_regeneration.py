@@ -1,9 +1,8 @@
 """Tests for PPTX regeneration functionality."""
-import uuid
 
 import pytest
 
-from app.db.models import Job, JobStatus, StepsVersion
+from app.db.models import JobStatus
 
 
 class TestPptxRegeneration:
@@ -19,7 +18,7 @@ class TestPptxRegeneration:
 
         response = client.put(
             f"/api/jobs/{succeeded_job.id}/steps",
-            json={"steps_json": new_steps, "edit_note": "Update for regeneration test"}
+            json={"steps_json": new_steps, "edit_note": "Update for regeneration test"},
         )
         assert response.status_code == 200
         new_version = response.json()["version"]
@@ -105,8 +104,7 @@ class TestStepsVersioning:
         modified_steps = steps_fixture.copy()
         modified_steps["title"] = "Edit 1"
         response = client.put(
-            f"/api/jobs/{succeeded_job.id}/steps",
-            json={"steps_json": modified_steps}
+            f"/api/jobs/{succeeded_job.id}/steps", json={"steps_json": modified_steps}
         )
         assert response.status_code == 200
         assert response.json()["version"] == initial_version + 1
@@ -114,8 +112,7 @@ class TestStepsVersioning:
         # Second edit
         modified_steps["title"] = "Edit 2"
         response = client.put(
-            f"/api/jobs/{succeeded_job.id}/steps",
-            json={"steps_json": modified_steps}
+            f"/api/jobs/{succeeded_job.id}/steps", json={"steps_json": modified_steps}
         )
         assert response.status_code == 200
         assert response.json()["version"] == initial_version + 2
@@ -130,7 +127,7 @@ class TestStepsVersioning:
             modified_steps["title"] = f"Version {i + 2}"
             response = client.put(
                 f"/api/jobs/{succeeded_job.id}/steps",
-                json={"steps_json": modified_steps, "edit_note": f"Edit {i + 1}"}
+                json={"steps_json": modified_steps, "edit_note": f"Edit {i + 1}"},
             )
             assert response.status_code == 200
 
@@ -153,8 +150,7 @@ class TestStepsVersioning:
         modified_steps = steps_fixture.copy()
         modified_steps["title"] = "New Version Title"
         response = client.put(
-            f"/api/jobs/{succeeded_job.id}/steps",
-            json={"steps_json": modified_steps}
+            f"/api/jobs/{succeeded_job.id}/steps", json={"steps_json": modified_steps}
         )
         assert response.status_code == 200
 
@@ -178,10 +174,7 @@ class TestStepsVersioning:
         for i in range(2):
             modified_steps = steps_fixture.copy()
             modified_steps["title"] = f"Version {i + 2}"
-            client.put(
-                f"/api/jobs/{succeeded_job.id}/steps",
-                json={"steps_json": modified_steps}
-            )
+            client.put(f"/api/jobs/{succeeded_job.id}/steps", json={"steps_json": modified_steps})
 
         # Get without version param
         response = client.get(f"/api/jobs/{succeeded_job.id}/steps")

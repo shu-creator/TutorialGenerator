@@ -1,6 +1,6 @@
 """Application configuration."""
+
 from functools import lru_cache
-from typing import Optional
 
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
@@ -22,10 +22,10 @@ class Settings(BaseSettings):
     s3_region: str = "us-east-1"
 
     # OpenAI
-    openai_api_key: Optional[str] = None
+    openai_api_key: str | None = None
 
     # Anthropic (optional)
-    anthropic_api_key: Optional[str] = None
+    anthropic_api_key: str | None = None
 
     # Provider settings
     llm_provider: str = "openai"
@@ -54,7 +54,7 @@ class Settings(BaseSettings):
     )
 
 
-@lru_cache()
+@lru_cache
 def get_settings() -> Settings:
     """Get cached settings instance."""
     return Settings()

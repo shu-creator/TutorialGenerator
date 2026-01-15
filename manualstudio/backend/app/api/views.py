@@ -1,15 +1,20 @@
 """Web UI views for ManualStudio."""
-import uuid
-from typing import Optional
 
-from fastapi import APIRouter, Depends, Request, Form, File, UploadFile, HTTPException
-from fastapi.responses import HTMLResponse, RedirectResponse
+import uuid
+
+from fastapi import APIRouter, Depends, HTTPException, Request
+from fastapi.responses import HTMLResponse
 from fastapi.templating import Jinja2Templates
 from sqlalchemy.orm import Session
 
 from app.core.config import get_settings
 from app.core.logging import get_logger
-from app.db import get_db, Job, JobStatus
+from app.db import Job, JobStatus, get_db
+from app.schemas.theme import (
+    ALLOWED_LOGO_EXTENSIONS,
+    MAX_LOGO_SIZE_BYTES,
+    merge_theme_with_defaults,
+)
 from app.services.storage import get_storage_service
 
 logger = get_logger(__name__)
@@ -27,7 +32,7 @@ async def index(request: Request):
             "request": request,
             "max_video_minutes": settings.max_video_minutes,
             "max_video_size_mb": settings.max_video_size_mb,
-        }
+        },
     )
 
 
@@ -50,6 +55,7 @@ async def job_detail(request: Request, job_id: str, db: Session = Depends(get_db
             storage = get_storage_service()
             key = storage.key_from_uri(job.steps_json_uri)
             import json
+
             content = storage.download_bytes(key)
             steps_data = json.loads(content)
         except Exception as e:
@@ -62,7 +68,7 @@ async def job_detail(request: Request, job_id: str, db: Session = Depends(get_db
             "job": job,
             "steps_data": steps_data,
             "JobStatus": JobStatus,
-        }
+        },
     )
 
 
@@ -86,11 +92,15 @@ async def steps_preview(request: Request, job_id: str, db: Session = Depends(get
         storage = get_storage_service()
         key = storage.key_from_uri(job.steps_json_uri)
         import json
+
         content = storage.download_bytes(key)
         steps_data = json.loads(content)
     except Exception as e:
         logger.error(f"Failed to load steps: {e}")
         raise HTTPException(status_code=500, detail="Failed to load steps")
+
+    # Load theme settings
+    theme = merge_theme_with_defaults(job.theme_json)
 
     return templates.TemplateResponse(
         "steps_preview.html",
@@ -98,5 +108,8 @@ async def steps_preview(request: Request, job_id: str, db: Session = Depends(get
             "request": request,
             "job": job,
             "steps_data": steps_data,
-        }
+            "theme": theme.model_dump(),
+            "max_logo_size_kb": MAX_LOGO_SIZE_BYTES // 1024,
+            "allowed_logo_extensions": ", ".join(ALLOWED_LOGO_EXTENSIONS),
+        },
     )

@@ -1,7 +1,6 @@
 """Scene detection service for finding key frames."""
-import os
+
 from dataclasses import dataclass
-from typing import Optional
 
 from app.core.logging import get_logger
 from app.utils.timecode import seconds_to_mmss
@@ -12,6 +11,7 @@ logger = get_logger(__name__)
 @dataclass
 class CandidateFrame:
     """A candidate frame for step extraction."""
+
     time_sec: float
     time_mmss: str
     filename: str
@@ -19,9 +19,7 @@ class CandidateFrame:
 
 
 def detect_scenes_pyscenedetect(
-    video_path: str,
-    threshold: float = 27.0,
-    min_scene_len: float = 2.0
+    video_path: str, threshold: float = 27.0, min_scene_len: float = 2.0
 ) -> list[float]:
     """
     Detect scene changes using PySceneDetect.
@@ -35,7 +33,7 @@ def detect_scenes_pyscenedetect(
         List of scene start times in seconds
     """
     try:
-        from scenedetect import open_video, SceneManager
+        from scenedetect import SceneManager, open_video
         from scenedetect.detectors import ContentDetector
 
         logger.info(f"Detecting scenes with PySceneDetect: {video_path}")
@@ -43,7 +41,9 @@ def detect_scenes_pyscenedetect(
         video = open_video(video_path)
         scene_manager = SceneManager()
         scene_manager.add_detector(
-            ContentDetector(threshold=threshold, min_scene_len=int(min_scene_len * video.frame_rate))
+            ContentDetector(
+                threshold=threshold, min_scene_len=int(min_scene_len * video.frame_rate)
+            )
         )
 
         scene_manager.detect_scenes(video)
@@ -72,9 +72,7 @@ def detect_scenes_pyscenedetect(
 
 
 def sample_frames_interval(
-    duration_sec: float,
-    interval_sec: float = 2.0,
-    max_frames: int = 100
+    duration_sec: float, interval_sec: float = 2.0, max_frames: int = 100
 ) -> list[float]:
     """
     Generate frame times at regular intervals.
@@ -102,7 +100,7 @@ def get_candidate_frames(
     output_dir: str,
     use_scene_detection: bool = True,
     fallback_interval: float = 3.0,
-    max_frames: int = 50
+    max_frames: int = 50,
 ) -> list[CandidateFrame]:
     """
     Get candidate frames for step extraction.
@@ -128,9 +126,7 @@ def get_candidate_frames(
     if len(scene_times) < 3:
         logger.info("Using interval sampling for frame candidates")
         scene_times = sample_frames_interval(
-            duration_sec,
-            interval_sec=fallback_interval,
-            max_frames=max_frames
+            duration_sec, interval_sec=fallback_interval, max_frames=max_frames
         )
 
     # Limit to max frames
@@ -142,22 +138,21 @@ def get_candidate_frames(
     # Create candidate frame objects
     candidates = []
     for i, time_sec in enumerate(scene_times):
-        filename = f"candidate_{i+1:03d}.png"
-        candidates.append(CandidateFrame(
-            time_sec=time_sec,
-            time_mmss=seconds_to_mmss(time_sec),
-            filename=filename,
-            scene_index=i + 1
-        ))
+        filename = f"candidate_{i + 1:03d}.png"
+        candidates.append(
+            CandidateFrame(
+                time_sec=time_sec,
+                time_mmss=seconds_to_mmss(time_sec),
+                filename=filename,
+                scene_index=i + 1,
+            )
+        )
 
     logger.info(f"Generated {len(candidates)} candidate frames")
     return candidates
 
 
-def filter_similar_frames(
-    frame_paths: list[str],
-    threshold: float = 0.9
-) -> list[int]:
+def filter_similar_frames(frame_paths: list[str], threshold: float = 0.9) -> list[int]:
     """
     Filter out similar consecutive frames using perceptual hashing.
 
