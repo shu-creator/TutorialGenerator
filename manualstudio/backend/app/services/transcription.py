@@ -1,15 +1,14 @@
 """Transcription service with provider abstraction."""
+
 import json
 import os
 from abc import ABC, abstractmethod
 from dataclasses import dataclass
-from functools import lru_cache
 from pathlib import Path
-from typing import Optional
 
 from app.core.config import get_settings
+from app.core.exceptions import ErrorCode, TranscriptionError
 from app.core.logging import get_logger
-from app.core.exceptions import TranscriptionError, ErrorCode
 
 logger = get_logger(__name__)
 
@@ -20,6 +19,7 @@ FIXTURES_DIR = Path(__file__).parent.parent.parent / "tests" / "fixtures"
 @dataclass
 class TranscriptSegment:
     """A segment of transcribed text with timestamps."""
+
     start_sec: float
     end_sec: float
     text: str
@@ -35,11 +35,7 @@ class TranscriptionProvider(ABC):
         pass
 
     @abstractmethod
-    def transcribe(
-        self,
-        audio_path: str,
-        language: str = "ja"
-    ) -> list[TranscriptSegment]:
+    def transcribe(self, audio_path: str, language: str = "ja") -> list[TranscriptSegment]:
         """
         Transcribe audio file.
 
@@ -60,22 +56,18 @@ class OpenAITranscriptionProvider(TranscriptionProvider):
         settings = get_settings()
         if not settings.openai_api_key:
             raise TranscriptionError(
-                "OPENAI_API_KEY not configured",
-                ErrorCode.TRANSCRIBE_PROVIDER_ERROR.value
+                "OPENAI_API_KEY not configured", ErrorCode.TRANSCRIBE_PROVIDER_ERROR.value
             )
 
         from openai import OpenAI
+
         self.client = OpenAI(api_key=settings.openai_api_key)
 
     @property
     def name(self) -> str:
         return "openai"
 
-    def transcribe(
-        self,
-        audio_path: str,
-        language: str = "ja"
-    ) -> list[TranscriptSegment]:
+    def transcribe(self, audio_path: str, language: str = "ja") -> list[TranscriptSegment]:
         """Transcribe using OpenAI Whisper API."""
         try:
             logger.info(f"Transcribing audio with OpenAI Whisper: {audio_path}")
@@ -87,16 +79,14 @@ class OpenAITranscriptionProvider(TranscriptionProvider):
                     file=audio_file,
                     language=language,
                     response_format="verbose_json",
-                    timestamp_granularities=["segment"]
+                    timestamp_granularities=["segment"],
                 )
 
             segments = []
             for seg in response.segments:
-                segments.append(TranscriptSegment(
-                    start_sec=seg.start,
-                    end_sec=seg.end,
-                    text=seg.text.strip()
-                ))
+                segments.append(
+                    TranscriptSegment(start_sec=seg.start, end_sec=seg.end, text=seg.text.strip())
+                )
 
             logger.info(f"Transcription complete: {len(segments)} segments")
             return segments
@@ -104,15 +94,14 @@ class OpenAITranscriptionProvider(TranscriptionProvider):
         except Exception as e:
             logger.error(f"Transcription failed: {e}")
             raise TranscriptionError(
-                f"Transcription failed: {e}",
-                ErrorCode.TRANSCRIBE_FAILED.value
+                f"Transcription failed: {e}", ErrorCode.TRANSCRIBE_FAILED.value
             )
 
 
 class MockTranscriptionProvider(TranscriptionProvider):
     """Mock provider for testing - loads from fixture file."""
 
-    def __init__(self, fixture_path: Optional[str] = None):
+    def __init__(self, fixture_path: str | None = None):
         """
         Initialize mock provider.
 
@@ -125,23 +114,17 @@ class MockTranscriptionProvider(TranscriptionProvider):
     def name(self) -> str:
         return "mock"
 
-    def transcribe(
-        self,
-        audio_path: str,
-        language: str = "ja"
-    ) -> list[TranscriptSegment]:
+    def transcribe(self, audio_path: str, language: str = "ja") -> list[TranscriptSegment]:
         """Return transcript from fixture file."""
         logger.info(f"Mock transcription for: {audio_path}")
 
         try:
             if os.path.exists(self.fixture_path):
-                with open(self.fixture_path, "r", encoding="utf-8") as f:
+                with open(self.fixture_path, encoding="utf-8") as f:
                     data = json.load(f)
                     segments = [
                         TranscriptSegment(
-                            start_sec=seg["start_sec"],
-                            end_sec=seg["end_sec"],
-                            text=seg["text"]
+                            start_sec=seg["start_sec"], end_sec=seg["end_sec"], text=seg["text"]
                         )
                         for seg in data
                     ]
@@ -161,7 +144,7 @@ class MockTranscriptionProvider(TranscriptionProvider):
 class TranscriptionService:
     """Transcription service with provider abstraction."""
 
-    def __init__(self, provider: Optional[str] = None):
+    def __init__(self, provider: str | None = None):
         settings = get_settings()
         provider_name = provider or settings.transcribe_provider
 
@@ -172,18 +155,14 @@ class TranscriptionService:
         else:
             raise TranscriptionError(
                 f"Unknown transcription provider: {provider_name}",
-                ErrorCode.TRANSCRIBE_PROVIDER_ERROR.value
+                ErrorCode.TRANSCRIBE_PROVIDER_ERROR.value,
             )
 
     @property
     def provider_name(self) -> str:
         return self._provider.name
 
-    def transcribe(
-        self,
-        audio_path: str,
-        language: str = "ja"
-    ) -> list[TranscriptSegment]:
+    def transcribe(self, audio_path: str, language: str = "ja") -> list[TranscriptSegment]:
         """
         Transcribe audio file.
 
@@ -198,16 +177,9 @@ class TranscriptionService:
 
     def segments_to_dict(self, segments: list[TranscriptSegment]) -> list[dict]:
         """Convert segments to serializable dictionaries."""
-        return [
-            {
-                "start_sec": s.start_sec,
-                "end_sec": s.end_sec,
-                "text": s.text
-            }
-            for s in segments
-        ]
+        return [{"start_sec": s.start_sec, "end_sec": s.end_sec, "text": s.text} for s in segments]
 
 
-def get_transcription_service(provider: Optional[str] = None) -> TranscriptionService:
+def get_transcription_service(provider: str | None = None) -> TranscriptionService:
     """Get transcription service instance."""
     return TranscriptionService(provider)

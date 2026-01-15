@@ -1,7 +1,6 @@
 """Tests for utility functions."""
-import pytest
 
-from app.utils.timecode import seconds_to_mmss, mmss_to_seconds
+from app.utils.timecode import mmss_to_seconds, seconds_to_mmss
 
 
 class TestTimecode:

@@ -1,6 +1,6 @@
 """Custom exceptions for ManualStudio."""
+
 from enum import Enum
-from typing import Optional
 
 
 class ErrorCode(str, Enum):
@@ -52,7 +52,7 @@ class ErrorCode(str, Enum):
 class ManualStudioError(Exception):
     """Base exception for ManualStudio."""
 
-    def __init__(self, message: str, code: Optional[str] = None):
+    def __init__(self, message: str, code: str | None = None):
         self.message = message
         self.code = code or ErrorCode.INTERNAL_ERROR.value
         super().__init__(self.message)
@@ -96,14 +96,14 @@ class UnsupportedFormatError(VideoValidationError):
 class TranscriptionError(ManualStudioError):
     """Raised when transcription fails."""
 
-    def __init__(self, message: str, code: Optional[str] = None):
+    def __init__(self, message: str, code: str | None = None):
         super().__init__(message, code or ErrorCode.TRANSCRIBE_FAILED.value)
 
 
 class LLMError(ManualStudioError):
     """Raised when LLM processing fails."""
 
-    def __init__(self, message: str, code: Optional[str] = None):
+    def __init__(self, message: str, code: str | None = None):
         super().__init__(message, code or ErrorCode.LLM_FAILED.value)
 
 
@@ -117,7 +117,7 @@ class LLMValidationError(LLMError):
 class StorageError(ManualStudioError):
     """Raised when storage operations fail."""
 
-    def __init__(self, message: str, code: Optional[str] = None):
+    def __init__(self, message: str, code: str | None = None):
         super().__init__(message, code or ErrorCode.STORAGE_ERROR.value)
 
 
@@ -131,14 +131,14 @@ class JobNotFoundError(ManualStudioError):
 class FFmpegError(ManualStudioError):
     """Raised when FFmpeg operations fail."""
 
-    def __init__(self, message: str, code: Optional[str] = None):
+    def __init__(self, message: str, code: str | None = None):
         super().__init__(message, code or ErrorCode.FFMPEG_FAILED.value)
 
 
 class PPTXError(ManualStudioError):
     """Raised when PPTX generation fails."""
 
-    def __init__(self, message: str, code: Optional[str] = None):
+    def __init__(self, message: str, code: str | None = None):
         super().__init__(message, code or ErrorCode.PPTX_FAILED.value)
 
 

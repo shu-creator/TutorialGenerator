@@ -132,6 +132,27 @@ docker-compose up --build
 
 バージョン履歴により、過去の編集内容も保持されます。
 
+### 5. テーマ設定（企業向けカスタマイズ）
+
+生成されるPPTXにロゴ、カラー、フッターを設定できます：
+
+1. ステッププレビューページで「テーマ設定」セクションを展開
+2. 以下を設定:
+   - **プライマリカラー**: タイトルと見出しの色（#RRGGBB形式）
+   - **フッターテキスト**: 各スライド下部に表示するテキスト（例: © 2026 Your Company）
+   - **ロゴ画像**: 各スライド右上に表示するロゴ（PNG/JPG、最大1MB）
+3. 「テーマを保存」をクリックして設定を保存
+4. 「保存してPPTX再生成」をクリックすると保存と再生成を一度に実行
+
+**ロゴ仕様:**
+- 形式: PNG, JPG, JPEG
+- サイズ上限: 1MB
+- 推奨サイズ: 約120×60px（自動リサイズされます）
+
+**注意:**
+- テーマ設定は動画の再処理を行わず、既存のフレームを使用してPPTXのみを再生成します
+- フッターとロゴの表示/非表示はチェックボックスで切り替え可能
+
 ## 処理パイプライン
 
 1. **INGEST**: 動画のアップロードと検証
@@ -201,6 +222,53 @@ Response: { "job_id": "uuid", "status": "RUNNING", "task_id": "..." }
 GET /api/jobs/{job_id}/download/pptx
 
 Response: Redirect to presigned URL
+```
+
+### テーマ取得
+```
+GET /api/jobs/{job_id}/theme
+
+Response: {
+  "primary_color": "#667EEA",
+  "footer_text": null,
+  "logo_uri": null,
+  "show_logo": true,
+  "show_footer": true
+}
+```
+
+### テーマ更新
+```
+PUT /api/jobs/{job_id}/theme
+Content-Type: application/json
+
+Body: {
+  "primary_color": "#FF0000",
+  "footer_text": "© 2026 Company",
+  "show_logo": true,
+  "show_footer": true
+}
+
+Response: {
+  "job_id": "uuid",
+  "theme": {...},
+  "message": "Theme updated successfully..."
+}
+```
+
+### ロゴアップロード
+```
+POST /api/jobs/{job_id}/theme/logo
+Content-Type: multipart/form-data
+
+Fields:
+- logo_file: PNG/JPG画像 (必須、最大1MB)
+
+Response: {
+  "job_id": "uuid",
+  "logo_uri": "s3://bucket/jobs/{job_id}/assets/logo.png",
+  "message": "Logo uploaded successfully..."
+}
 ```
 
 ## steps.json スキーマ
@@ -425,6 +493,7 @@ ruff format app/ tests/ --check
 | `tests/test_api_steps.py` | Steps API のユニットテスト |
 | `tests/test_pptx_regeneration.py` | PPTX再生成のテスト |
 | `tests/test_security.py` | セキュリティ回帰テスト |
+| `tests/test_theme.py` | テーマ設定のテスト |
 | `tests/test_utils.py` | ユーティリティ関数のテスト |
 | `tests/fixtures/` | テスト用フィクスチャデータ |
 
@@ -466,6 +535,7 @@ alembic downgrade -1
 - [x] 手順の手動編集機能
 - [x] PPTX再生成機能
 - [x] バージョン履歴管理
+- [x] テーマ設定（ロゴ/カラー/フッター）
 - [ ] スライドテンプレートのカスタマイズ
 - [ ] 複数言語対応の強化
 - [ ] Azure/AWS Transcribe対応

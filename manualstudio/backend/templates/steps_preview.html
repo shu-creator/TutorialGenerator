@@ -216,6 +216,144 @@
         background: #dc3545;
     }
 
+    /* Theme settings styles */
+    .theme-section {
+        margin-top: 24px;
+        border-top: 1px solid #eee;
+        padding-top: 24px;
+    }
+
+    .theme-section h3 {
+        display: flex;
+        align-items: center;
+        gap: 8px;
+        cursor: pointer;
+        user-select: none;
+    }
+
+    .theme-section h3::before {
+        content: "▶";
+        font-size: 12px;
+        transition: transform 0.2s;
+    }
+
+    .theme-section.expanded h3::before {
+        transform: rotate(90deg);
+    }
+
+    .theme-content {
+        display: none;
+        padding-top: 16px;
+    }
+
+    .theme-section.expanded .theme-content {
+        display: block;
+    }
+
+    .theme-row {
+        display: flex;
+        gap: 24px;
+        margin-bottom: 16px;
+        flex-wrap: wrap;
+    }
+
+    .theme-field {
+        flex: 1;
+        min-width: 200px;
+    }
+
+    .theme-field label {
+        display: block;
+        margin-bottom: 8px;
+        font-weight: 500;
+    }
+
+    .color-picker-wrapper {
+        display: flex;
+        align-items: center;
+        gap: 12px;
+    }
+
+    .color-picker-wrapper input[type="color"] {
+        width: 50px;
+        height: 40px;
+        padding: 0;
+        border: 2px solid #ddd;
+        border-radius: 4px;
+        cursor: pointer;
+    }
+
+    .color-picker-wrapper input[type="text"] {
+        width: 100px;
+        padding: 8px 12px;
+        border: 2px solid #ddd;
+        border-radius: 4px;
+        font-family: monospace;
+    }
+
+    .color-preview {
+        width: 24px;
+        height: 24px;
+        border-radius: 4px;
+        border: 1px solid #ddd;
+    }
+
+    .logo-upload-area {
+        border: 2px dashed #ddd;
+        border-radius: 8px;
+        padding: 16px;
+        text-align: center;
+        cursor: pointer;
+        transition: border-color 0.2s;
+    }
+
+    .logo-upload-area:hover {
+        border-color: #667eea;
+    }
+
+    .logo-upload-area.has-logo {
+        border-style: solid;
+    }
+
+    .logo-preview {
+        max-width: 120px;
+        max-height: 60px;
+        margin-bottom: 8px;
+    }
+
+    .logo-info {
+        font-size: 12px;
+        color: #888;
+    }
+
+    .checkbox-wrapper {
+        display: flex;
+        align-items: center;
+        gap: 8px;
+    }
+
+    .checkbox-wrapper input[type="checkbox"] {
+        width: 18px;
+        height: 18px;
+    }
+
+    .theme-buttons {
+        display: flex;
+        gap: 12px;
+        margin-top: 16px;
+        flex-wrap: wrap;
+    }
+
+    .btn-theme-save {
+        background: #28a745;
+        color: white;
+    }
+
+    .btn-save-regenerate {
+        background: linear-gradient(135deg, #28a745 0%, #17a2b8 100%);
+        color: white;
+    }
+
     @media (max-width: 768px) {
         .step-card {
             flex-direction: column;
@@ -262,6 +400,72 @@
                 PPTX再生成
             </button>
             <a href="/api/jobs/{{ job.id }}/download/pptx" class="btn btn-primary">PPTXダウンロード</a>
+        </div>
+    </div>
+
+    <!-- Theme Settings Section -->
+    <div class="theme-section" id="themeSection">
+        <h3 onclick="toggleThemeSection()">テーマ設定</h3>
+        <div class="theme-content">
+            <div class="theme-row">
+                <div class="theme-field">
+                    <label>プライマリカラー（タイトル・見出し色）</label>
+                    <div class="color-picker-wrapper">
+                        <input type="color" id="primaryColorPicker" value="{{ theme.primary_color }}"
+                               onchange="syncColorInput(this.value)">
+                        <input type="text" id="primaryColorText" value="{{ theme.primary_color }}"
+                               placeholder="#RRGGBB" maxlength="7"
+                               onchange="syncColorPicker(this.value)">
+                    </div>
+                </div>
+                <div class="theme-field">
+                    <label>フッターテキスト</label>
+                    <input type="text" id="footerText" class="edit-input"
+                           value="{{ theme.footer_text or '' }}"
+                           placeholder="例: © 2026 Your Company" maxlength="100">
+                </div>
+            </div>
+
+            <div class="theme-row">
+                <div class="theme-field">
+                    <label>ロゴ画像</label>
+                    <div class="logo-upload-area {{ 'has-logo' if theme.logo_uri else '' }}"
+                         onclick="document.getElementById('logoFileInput').click()">
+                        {% if theme.logo_uri %}
+                        <img src="/api/jobs/{{ job.id }}/theme/logo" class="logo-preview" id="logoPreview"
+                             onerror="this.style.display='none'">
+                        {% else %}
+                        <img class="logo-preview" id="logoPreview" style="display: none;">
+                        {% endif %}
+                        <p id="logoUploadText">{{ 'クリックして変更' if theme.logo_uri else 'クリックしてアップロード' }}</p>
+                        <p class="logo-info">PNG/JPG, 最大{{ max_logo_size_kb }}KB</p>
+                    </div>
+                    <input type="file" id="logoFileInput" accept="{{ allowed_logo_extensions }}"
+                           style="display: none;" onchange="uploadLogo(this)">
+                </div>
+                <div class="theme-field">
+                    <label>表示オプション</label>
+                    <div style="display: flex; flex-direction: column; gap: 12px;">
+                        <div class="checkbox-wrapper">
+                            <input type="checkbox" id="showLogo" {{ 'checked' if theme.show_logo else '' }}>
+                            <label for="showLogo">ロゴを表示</label>
+                        </div>
+                        <div class="checkbox-wrapper">
+                            <input type="checkbox" id="showFooter" {{ 'checked' if theme.show_footer else '' }}>
+                            <label for="showFooter">フッターを表示</label>
+                        </div>
+                    </div>
+                </div>
+            </div>
+
+            <div class="theme-buttons">
+                <button type="button" class="btn btn-theme-save" onclick="saveTheme()">
+                    テーマを保存
+                </button>
+                <button type="button" class="btn btn-save-regenerate" onclick="saveThemeAndRegenerate()">
+                    保存してPPTX再生成
+                </button>
+            </div>
         </div>
     </div>
 </div>
@@ -399,6 +603,129 @@
     const jobId = '{{ job.id }}';
     let isEditMode = false;
     let originalStepsData = {{ steps_data | tojson | safe }};
+    let currentTheme = {{ theme | tojson | safe }};
+
+    // Theme section toggle
+    function toggleThemeSection() {
+        const section = document.getElementById('themeSection');
+        section.classList.toggle('expanded');
+    }
+
+    // Color picker sync
+    function syncColorInput(value) {
+        document.getElementById('primaryColorText').value = value.toUpperCase();
+    }
+
+    function syncColorPicker(value) {
+        // Validate hex format
+        if (/^#[0-9A-Fa-f]{6}$/.test(value)) {
+            document.getElementById('primaryColorPicker').value = value;
+        }
+    }
+
+    // Logo upload
+    async function uploadLogo(input) {
+        const file = input.files[0];
+        if (!file) return;
+
+        // Validate file size (1MB)
+        if (file.size > {{ max_logo_size_kb }} * 1024) {
+            showToast(`ファイルサイズが大きすぎます（最大{{ max_logo_size_kb }}KB）`, 'error');
+            return;
+        }
+
+        showLoading('ロゴをアップロード中...');
+
+        const formData = new FormData();
+        formData.append('logo_file', file);
+
+        try {
+            const response = await fetch(`/api/jobs/${jobId}/theme/logo`, {
+                method: 'POST',
+                body: formData
+            });
+
+            const data = await response.json();
+
+            if (response.ok) {
+                showToast('ロゴをアップロードしました', 'success');
+
+                // Update preview
+                const preview = document.getElementById('logoPreview');
+                preview.src = URL.createObjectURL(file);
+                preview.style.display = 'block';
+
+                const uploadArea = document.querySelector('.logo-upload-area');
+                uploadArea.classList.add('has-logo');
+                document.getElementById('logoUploadText').textContent = 'クリックして変更';
+
+                currentTheme.logo_uri = data.logo_uri;
+            } else {
+                showToast(data.detail || 'アップロードに失敗しました', 'error');
+            }
+        } catch (error) {
+            showToast('エラーが発生しました: ' + error.message, 'error');
+        } finally {
+            hideLoading();
+        }
+    }
+
+    // Collect theme data from form
+    function collectThemeData() {
+        return {
+            primary_color: document.getElementById('primaryColorText').value,
+            footer_text: document.getElementById('footerText').value || null,
+            show_logo: document.getElementById('showLogo').checked,
+            show_footer: document.getElementById('showFooter').checked
+        };
+    }
+
+    // Save theme
+    async function saveTheme() {
+        const themeData = collectThemeData();
+
+        // Validate color format
+        if (!/^#[0-9A-Fa-f]{6}$/.test(themeData.primary_color)) {
+            showToast('カラー形式が無効です（#RRGGBB形式で入力してください）', 'error');
+            return false;
+        }
+
+        showLoading('テーマを保存中...');
+
+        try {
+            const response = await fetch(`/api/jobs/${jobId}/theme`, {
+                method: 'PUT',
+                headers: {
+                    'Content-Type': 'application/json',
+                },
+                body: JSON.stringify(themeData)
+            });
+
+            const data = await response.json();
+
+            if (response.ok) {
+                showToast('テーマを保存しました', 'success');
+                currentTheme = data.theme;
+                return true;
+            } else {
+                showToast(data.detail || 'テーマの保存に失敗しました', 'error');
+                return false;
+            }
+        } catch (error) {
+            showToast('エラーが発生しました: ' + error.message, 'error');
+            return false;
+        } finally {
+            hideLoading();
+        }
+    }
+
+    // Save theme and regenerate PPTX
+    async function saveThemeAndRegenerate() {
+        const saved = await saveTheme();
+        if (saved) {
+            await regeneratePptx();
+        }
+    }
 
     function toggleEditMode() {
         isEditMode = !isEditMode;

@@ -1,4 +1,5 @@
 """Celery tasks for video processing pipeline."""
+
 import json
 import os
 import shutil
@@ -10,17 +11,17 @@ from celery import Task
 from sqlalchemy.orm import Session
 
 from app.core.config import get_settings
+from app.core.exceptions import ErrorCode, ManualStudioError
 from app.core.logging import get_logger, set_trace_id
-from app.core.exceptions import ManualStudioError, ErrorCode
 from app.db.database import SessionLocal
-from app.db.models import Job, JobStatus, JobStage, StepsVersion
-from app.services.storage import get_storage_service
-from app.services.transcription import get_transcription_service
-from app.services.scene_detection import get_candidate_frames
+from app.db.models import Job, JobStage, JobStatus, StepsVersion
+from app.schemas.theme import merge_theme_with_defaults
 from app.services.llm import get_llm_service
 from app.services.pptx_generator import PPTXGenerator
-from app.utils.ffmpeg import probe_video, extract_audio, extract_frame
-from app.utils.timecode import seconds_to_mmss
+from app.services.scene_detection import get_candidate_frames
+from app.services.storage import get_storage_service
+from app.services.transcription import get_transcription_service
+from app.utils.ffmpeg import extract_audio, extract_frame, probe_video
 
 from .celery_app import celery_app
 
@@ -139,12 +140,15 @@ def process_video(self, job_id: str):
         job.video_resolution = video_info.resolution
         db.commit()
 
-        logger.info(f"Video: {video_info.duration_sec:.1f}s, {video_info.resolution}, {video_info.fps:.1f}fps")
+        logger.info(
+            f"Video: {video_info.duration_sec:.1f}s, {video_info.resolution}, {video_info.fps:.1f}fps"
+        )
 
         # Validate duration
         max_duration = settings.max_video_duration_seconds
         if video_info.duration_sec > max_duration:
             from app.core.exceptions import VideoTooLongError
+
             raise VideoTooLongError(video_info.duration_sec, max_duration)
 
         # Check for audio
@@ -191,7 +195,7 @@ def process_video(self, job_id: str):
             frames_dir,
             use_scene_detection=True,
             fallback_interval=3.0,
-            max_frames=50
+            max_frames=50,
         )
 
         candidate_dicts = [
@@ -199,7 +203,7 @@ def process_video(self, job_id: str):
                 "time_sec": c.time_sec,
                 "time_mmss": c.time_mmss,
                 "filename": c.filename,
-                "scene_index": c.scene_index
+                "scene_index": c.scene_index,
             }
             for c in candidates
         ]
@@ -248,11 +252,11 @@ def process_video(self, job_id: str):
             title=job.title or "操作マニュアル",
             goal=job.goal or "",
             language=job.language,
-            transcript_segments=transcript_segments if 'transcript_segments' in dir() else [],
+            transcript_segments=transcript_segments if "transcript_segments" in dir() else [],
             candidate_frames=candidate_dicts,
             video_info=video_info_dict,
             transcription_provider=job.transcription_provider or "none",
-            max_retries=1
+            max_retries=1,
         )
 
         # Save steps.json to storage
@@ -304,6 +308,9 @@ def process_video(self, job_id: str):
         # ===== STAGE 7: GENERATE PPTX =====
         update_job_progress(db, job, JobStage.GENERATE_PPTX.value, 85)
 
+        # Load theme settings (will be default for new jobs)
+        theme = merge_theme_with_defaults(job.theme_json)
+
         pptx_generator = PPTXGenerator()
         pptx_local = os.path.join(temp_dir, "output.pptx")
 
@@ -326,12 +333,17 @@ def process_video(self, job_id: str):
         pptx_bytes = pptx_generator.generate(
             steps_data,
             pptx_frame_paths,
-            pptx_local
+            pptx_local,
+            theme=theme,
         )
 
         # Upload PPTX
         pptx_key = f"jobs/{job_id}/output.pptx"
-        storage.upload_bytes(pptx_bytes, pptx_key, "application/vnd.openxmlformats-officedocument.presentationml.presentation")
+        storage.upload_bytes(
+            pptx_bytes,
+            pptx_key,
+            "application/vnd.openxmlformats-officedocument.presentationml.presentation",
+        )
         job.pptx_uri = f"s3://{settings.s3_bucket}/{pptx_key}"
         db.commit()
 
@@ -397,10 +409,13 @@ def regenerate_pptx(self, job_id: str):
         update_job_progress(db, job, JobStage.GENERATE_PPTX_ONLY.value, 10)
 
         # Get current steps.json
-        steps_version = db.query(StepsVersion).filter(
-            StepsVersion.job_id == job.id,
-            StepsVersion.version == job.current_steps_version
-        ).first()
+        steps_version = (
+            db.query(StepsVersion)
+            .filter(
+                StepsVersion.job_id == job.id, StepsVersion.version == job.current_steps_version
+            )
+            .first()
+        )
 
         if steps_version:
             steps_data = steps_version.steps_json
@@ -410,7 +425,9 @@ def regenerate_pptx(self, job_id: str):
             steps_content = storage.download_bytes(steps_key)
             steps_data = json.loads(steps_content)
 
-        logger.info(f"Loaded steps version {job.current_steps_version} with {len(steps_data.get('steps', []))} steps")
+        logger.info(
+            f"Loaded steps version {job.current_steps_version} with {len(steps_data.get('steps', []))} steps"
+        )
 
         update_job_progress(db, job, JobStage.GENERATE_PPTX_ONLY.value, 30)
 
@@ -437,12 +454,29 @@ def regenerate_pptx(self, job_id: str):
                         candidate_key = f"{frames_prefix}{candidate_file}"
                         storage.download_file(candidate_key, local_path)
                         frame_local_paths[frame_file] = local_path
-                    except:
+                    except Exception:
                         pass
 
         logger.info(f"Downloaded {len(frame_local_paths)} frames")
 
         update_job_progress(db, job, JobStage.GENERATE_PPTX_ONLY.value, 60)
+
+        # Load theme settings
+        theme = merge_theme_with_defaults(job.theme_json)
+        logger.info(f"Using theme: primary_color={theme.primary_color}")
+
+        # Download logo if configured
+        logo_local_path = None
+        if theme.show_logo and theme.logo_uri:
+            try:
+                logo_key = storage.key_from_uri(theme.logo_uri)
+                logo_ext = os.path.splitext(logo_key)[1]
+                logo_local_path = os.path.join(temp_dir, f"logo{logo_ext}")
+                storage.download_file(logo_key, logo_local_path)
+                logger.info(f"Downloaded logo: {logo_key}")
+            except Exception as e:
+                logger.warning(f"Failed to download logo: {e}")
+                logo_local_path = None
 
         # Generate PPTX
         pptx_generator = PPTXGenerator()
@@ -451,7 +485,9 @@ def regenerate_pptx(self, job_id: str):
         pptx_bytes = pptx_generator.generate(
             steps_data,
             frame_local_paths,
-            pptx_local
+            pptx_local,
+            theme=theme,
+            logo_path=logo_local_path,
         )
 
         update_job_progress(db, job, JobStage.GENERATE_PPTX_ONLY.value, 80)
@@ -461,7 +497,7 @@ def regenerate_pptx(self, job_id: str):
         storage.upload_bytes(
             pptx_bytes,
             pptx_key,
-            "application/vnd.openxmlformats-officedocument.presentationml.presentation"
+            "application/vnd.openxmlformats-officedocument.presentationml.presentation",
         )
 
         # Update job's pptx_uri to the new version

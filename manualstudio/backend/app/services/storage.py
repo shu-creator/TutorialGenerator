@@ -1,17 +1,18 @@
 """Storage service for S3/MinIO."""
+
 import io
 import os
-from functools import lru_cache
-from typing import Optional, BinaryIO
 import zipfile
+from functools import lru_cache
+from typing import BinaryIO
 
 import boto3
 from botocore.config import Config
 from botocore.exceptions import ClientError
 
 from app.core.config import get_settings
-from app.core.logging import get_logger
 from app.core.exceptions import StorageError
+from app.core.logging import get_logger
 
 logger = get_logger(__name__)
 
@@ -33,12 +34,7 @@ class StorageService:
             config=Config(signature_version="s3v4"),
         )
 
-    def upload_file(
-        self,
-        file_obj: BinaryIO,
-        key: str,
-        content_type: Optional[str] = None
-    ) -> str:
+    def upload_file(self, file_obj: BinaryIO, key: str, content_type: str | None = None) -> str:
         """
         Upload a file to storage.
 
@@ -56,10 +52,7 @@ class StorageService:
                 extra_args["ContentType"] = content_type
 
             self.client.upload_fileobj(
-                file_obj,
-                self.bucket,
-                key,
-                ExtraArgs=extra_args if extra_args else None
+                file_obj, self.bucket, key, ExtraArgs=extra_args if extra_args else None
             )
 
             uri = f"s3://{self.bucket}/{key}"
@@ -70,12 +63,7 @@ class StorageService:
             logger.error(f"Failed to upload file to {key}: {e}")
             raise StorageError(f"Failed to upload file: {e}")
 
-    def upload_bytes(
-        self,
-        data: bytes,
-        key: str,
-        content_type: Optional[str] = None
-    ) -> str:
+    def upload_bytes(self, data: bytes, key: str, content_type: str | None = None) -> str:
         """Upload bytes to storage."""
         return self.upload_file(io.BytesIO(data), key, content_type)
 
@@ -113,8 +101,8 @@ class StorageService:
         self,
         key: str,
         expires_in: int = 3600,
-        response_content_type: Optional[str] = None,
-        response_content_disposition: Optional[str] = None
+        response_content_type: str | None = None,
+        response_content_disposition: str | None = None,
     ) -> str:
         """
         Generate a presigned URL for downloading a file.
@@ -140,9 +128,7 @@ class StorageService:
                 params["ResponseContentDisposition"] = response_content_disposition
 
             url = self.client.generate_presigned_url(
-                "get_object",
-                Params=params,
-                ExpiresIn=expires_in
+                "get_object", Params=params, ExpiresIn=expires_in
             )
 
             # Replace internal docker hostname with localhost for local dev
@@ -158,10 +144,7 @@ class StorageService:
     def list_objects(self, prefix: str) -> list[dict]:
         """List objects with given prefix."""
         try:
-            response = self.client.list_objects_v2(
-                Bucket=self.bucket,
-                Prefix=prefix
-            )
+            response = self.client.list_objects_v2(Bucket=self.bucket, Prefix=prefix)
             return response.get("Contents", [])
         except ClientError as e:
             logger.error(f"Failed to list objects with prefix {prefix}: {e}")
@@ -223,7 +206,7 @@ class StorageService:
         return uri
 
 
-@lru_cache()
+@lru_cache
 def get_storage_service() -> StorageService:
     """Get cached storage service instance."""
     return StorageService()

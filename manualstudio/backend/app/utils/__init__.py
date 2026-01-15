@@ -1,11 +1,11 @@
 # Utilities module
 from .ffmpeg import (
-    probe_video,
+    VideoInfo,
     extract_audio,
     extract_frame,
-    VideoInfo,
+    probe_video,
 )
-from .timecode import seconds_to_mmss, mmss_to_seconds
+from .timecode import mmss_to_seconds, seconds_to_mmss
 
 __all__ = [
     "probe_video",
