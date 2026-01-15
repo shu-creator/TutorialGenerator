@@ -1,9 +1,70 @@
-"""Export services for generating Markdown and HTML from steps.json."""
+"""Export services for generating Markdown, HTML, and SRT from steps/transcript data."""
 
 from __future__ import annotations
 
 import html
 from typing import Any
+
+
+def _format_srt_timestamp(seconds: float) -> str:
+    """
+    Format seconds as SRT timestamp (HH:MM:SS,mmm).
+
+    Args:
+        seconds: Time in seconds (e.g., 65.5)
+
+    Returns:
+        SRT formatted timestamp (e.g., "00:01:05,500")
+    """
+    if seconds < 0:
+        seconds = 0
+
+    hours = int(seconds // 3600)
+    minutes = int((seconds % 3600) // 60)
+    secs = int(seconds % 60)
+    millis = int((seconds % 1) * 1000)
+
+    return f"{hours:02d}:{minutes:02d}:{secs:02d},{millis:03d}"
+
+
+def generate_srt(transcript_segments: list[dict[str, Any]]) -> str:
+    """
+    Generate SRT subtitle file from transcript segments.
+
+    Args:
+        transcript_segments: List of segments with start_sec, end_sec, text
+
+    Returns:
+        SRT formatted string
+    """
+    if not transcript_segments:
+        return ""
+
+    lines: list[str] = []
+
+    for i, segment in enumerate(transcript_segments, 1):
+        start_sec = segment.get("start_sec", 0)
+        end_sec = segment.get("end_sec", 0)
+        text = segment.get("text", "").strip()
+
+        if not text:
+            continue
+
+        # Sequence number
+        lines.append(str(i))
+
+        # Timestamp line
+        start_ts = _format_srt_timestamp(start_sec)
+        end_ts = _format_srt_timestamp(end_sec)
+        lines.append(f"{start_ts} --> {end_ts}")
+
+        # Text (can be multiline)
+        lines.append(text)
+
+        # Blank line separator
+        lines.append("")
+
+    return "\n".join(lines)
 
 
 def generate_markdown(steps_data: dict[str, Any]) -> str:

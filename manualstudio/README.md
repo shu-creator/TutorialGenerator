@@ -168,6 +168,7 @@ http://localhost:8000/jobs でジョブ一覧を確認・管理できます:
 - **PPTX**: PowerPointスライド（プレゼンテーション用）
 - **Markdown (.md)**: テキスト形式のマニュアル（Notion/GitHub/Confluence向け）
 - **HTML (.html)**: スタンドアロンのWebページ（メール添付/社内ポータル向け）
+- **SRT (.srt)**: 字幕ファイル（動画編集ソフトでの字幕表示用）
 - **frames.zip**: 抽出されたフレーム画像
 
 **用途別おすすめ形式:**
@@ -176,7 +177,10 @@ http://localhost:8000/jobs でジョブ一覧を確認・管理できます:
 | プレゼンテーション/研修 | PPTX |
 | ナレッジベース（Notion等）| Markdown |
 | メール添付/Webポータル | HTML |
+| 動画字幕/翻訳ベース | SRT |
 | 画像の再利用 | frames.zip |
+
+**注意:** SRTは音声トラックがある動画のみダウンロード可能です。音声なし動画では無効化されます。
 
 ### 5. 手順の編集とPPTX再生成
 
@@ -381,6 +385,32 @@ Response: 完全なHTMLドキュメント（CSS含む、スタンドアロン）
 - スタンドアロンHTMLファイル（外部依存なし）
 - レスポンシブデザイン
 - XSS対策済み（全ユーザー入力をエスケープ）
+
+### SRTダウンロード
+```
+GET /api/jobs/{job_id}/download/srt
+
+Content-Type: text/srt; charset=utf-8
+Content-Disposition: attachment; filename*=UTF-8''...
+
+Response: SRT形式の字幕ファイル
+```
+
+**特徴:**
+- 文字起こしデータをSRT字幕形式で出力
+- タイムスタンプはHH:MM:SS,mmm形式
+- 音声なし動画の場合は404を返す
+
+**SRT形式例:**
+```
+1
+00:00:00,000 --> 00:00:05,000
+それでは、経費精算システムの使い方を説明します。
+
+2
+00:00:05,000 --> 00:00:12,000
+まず、ブラウザを開いて、経費精算システムのURLにアクセスしてください。
+```
 
 ### テーマ取得
 ```
@@ -685,7 +715,7 @@ ruff format app/ tests/ --check
 | `tests/test_e2e.py` | E2Eスモークテスト |
 | `tests/test_api_steps.py` | Steps API のユニットテスト |
 | `tests/test_jobs_api.py` | ジョブ一覧/バッチ/キャンセル/リトライのテスト |
-| `tests/test_export.py` | Markdown/HTMLエクスポートのテスト（XSS防止含む）|
+| `tests/test_export.py` | Markdown/HTML/SRTエクスポートのテスト（XSS防止含む）|
 | `tests/test_pptx_regeneration.py` | PPTX再生成のテスト |
 | `tests/test_security.py` | セキュリティ回帰テスト |
 | `tests/test_theme.py` | テーマ設定のテスト |
@@ -737,23 +767,10 @@ alembic downgrade -1
 - [x] バッチ処理（複数動画の一括処理）
 - [x] ジョブキャンセル・リトライ
 - [x] エクスポート拡充（Markdown/HTML）
-- [ ] SRTエクスポート（字幕ファイル）※後述
+- [x] SRTエクスポート（字幕ファイル）
 - [ ] スライドテンプレートのカスタマイズ
 - [ ] 複数言語対応の強化
 - [ ] Azure/AWS Transcribe対応
-
-### SRTエクスポートについて
-
-現在、SRT（字幕）エクスポートは未実装です。理由と今後の計画：
-
-**見送り理由:**
-- 現在のパイプラインでは、transcript segments（タイムスタンプ付きの文字起こしデータ）がジョブ完了後に保存されていない
-- steps.jsonにはステップ単位の時間範囲はあるが、単語レベルのタイムスタンプは含まれていない
-
-**実装ロードマップ:**
-1. transcript segmentsのDB/Storage保存を追加（パイプライン変更）
-2. GET /api/jobs/{job_id}/download/srt エンドポイントを追加
-3. ステップのナレーションをSRT形式に変換するロジック実装
 
 ## ライセンス
 

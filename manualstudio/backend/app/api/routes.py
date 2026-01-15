@@ -27,7 +27,7 @@ from app.schemas.theme import (
     ThemeUpdate,
     merge_theme_with_defaults,
 )
-from app.services.export import generate_html, generate_markdown
+from app.services.export import generate_html, generate_markdown, generate_srt
 from app.services.llm import LLMValidationError, validate_steps_json
 from app.services.storage import get_storage_service
 from app.workers.celery_app import celery_app
@@ -394,6 +394,7 @@ async def get_job(job_id: str, db: Session = Depends(get_db)):
             "steps_json": job.steps_json_uri is not None,
             "pptx": job.pptx_uri is not None,
             "frames": job.frames_prefix_uri is not None,
+            "transcript": job.transcript_uri is not None or job.transcript_segments is not None,
         }
         response["video_info"] = {
             "duration_sec": job.video_duration_sec,
@@ -839,6 +840,70 @@ async def download_html(job_id: str, db: Session = Depends(get_db)):
         media_type="text/html; charset=utf-8",
         headers={
             "Content-Disposition": _build_content_disposition(f"{filename}.html"),
+        },
+    )
+
+
+@router.get("/jobs/{job_id}/download/srt")
+async def download_srt(job_id: str, db: Session = Depends(get_db)):
+    """
+    Download transcript as SRT subtitle file.
+
+    Generates SRT on-demand from transcript segments.
+    Returns 404 if no transcript is available (e.g., video had no audio).
+    """
+    try:
+        job_uuid = uuid.UUID(job_id)
+    except ValueError:
+        raise HTTPException(status_code=400, detail="Invalid job ID format")
+
+    job = db.query(Job).filter(Job.id == job_uuid).first()
+    if not job:
+        raise HTTPException(status_code=404, detail="Job not found")
+
+    if job.status != JobStatus.SUCCEEDED:
+        raise HTTPException(
+            status_code=400,
+            detail=f"Cannot download from job in {job.status.value} status. Job must be SUCCEEDED.",
+        )
+
+    # Get transcript segments - try storage first, fallback to DB
+    transcript_segments = None
+
+    if job.transcript_uri:
+        try:
+            storage = get_storage_service()
+            key = storage.key_from_uri(job.transcript_uri)
+            content = storage.download_bytes(key)
+            transcript_segments = json.loads(content)
+        except Exception as e:
+            logger.warning(f"Failed to load transcript from storage: {e}")
+
+    # Fallback to DB
+    if transcript_segments is None:
+        transcript_segments = job.transcript_segments
+
+    if not transcript_segments:
+        raise HTTPException(
+            status_code=404,
+            detail="No transcript available for this job (video may have no audio)",
+        )
+
+    # Generate SRT
+    srt_content = generate_srt(transcript_segments)
+
+    if not srt_content:
+        raise HTTPException(
+            status_code=404,
+            detail="Transcript segments contain no text",
+        )
+
+    filename = job.title or "transcript"
+    return Response(
+        content=srt_content,
+        media_type="text/srt; charset=utf-8",
+        headers={
+            "Content-Disposition": _build_content_disposition(f"{filename}.srt"),
         },
     )
 
