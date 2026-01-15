@@ -1,5 +1,7 @@
 """PPTX generation service."""
 
+from __future__ import annotations
+
 import os
 from io import BytesIO
 
