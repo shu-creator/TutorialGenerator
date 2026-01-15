@@ -358,21 +358,22 @@ celery -A app.workers.celery_app worker --loglevel=info
 
 ### テスト
 
+#### ユニットテスト（Docker不要）
+
 ```bash
 cd backend
 
 # 開発用依存関係のインストール
 pip install -r requirements-dev.txt
 
-# 全テストを実行
-pytest tests/
-
-# 詳細出力で実行
-pytest tests/ -v
+# 全テストを実行（mockプロバイダーを使用、APIキー不要）
+TRANSCRIBE_PROVIDER=mock LLM_PROVIDER=mock pytest tests/ -v
 
 # 特定のテストファイルを実行
 pytest tests/test_e2e.py
 pytest tests/test_api_steps.py
+pytest tests/test_security.py
+pytest tests/test_pptx_regeneration.py
 
 # カバレッジレポート付きで実行
 pytest tests/ --cov=app --cov-report=html
@@ -380,13 +381,65 @@ pytest tests/ --cov=app --cov-report=html
 
 テストは mock プロバイダーを使用するため、OpenAI APIキーは不要です。
 
+#### Docker E2Eスモークテスト
+
+Docker環境でフルパイプラインをテストする場合：
+
+```bash
+# mockプロバイダーでDocker起動
+docker compose -f docker-compose.yml -f docker-compose.test.yml up -d
+
+# E2Eスモークテスト実行（ffmpegでテスト動画を生成）
+./scripts/e2e_smoke_test.sh http://localhost:8000
+
+# 終了
+docker compose down
+```
+
+#### CI（GitHub Actions）
+
+PRを作成すると自動的にCIが実行されます：
+- Python 3.11でユニットテスト実行
+- ruffによるlint/format チェック
+- mockプロバイダーを使用（外部API不要）
+
+ローカルでCIと同じ環境を再現する場合：
+
+```bash
+cd backend
+pip install ruff
+
+# lintチェック
+ruff check app/ tests/
+
+# formatチェック
+ruff format app/ tests/ --check
+```
+
 #### テストファイル構成
 
-- `tests/conftest.py` - pytest フィクスチャ（テストDB、モックストレージ、クライアント）
-- `tests/test_e2e.py` - E2Eスモークテスト
-- `tests/test_api_steps.py` - Steps API のユニットテスト
-- `tests/test_utils.py` - ユーティリティ関数のテスト
-- `tests/fixtures/` - テスト用フィクスチャデータ
+| ファイル | 説明 |
+|---------|------|
+| `tests/conftest.py` | pytest フィクスチャ（テストDB、モックストレージ、クライアント）|
+| `tests/test_e2e.py` | E2Eスモークテスト |
+| `tests/test_api_steps.py` | Steps API のユニットテスト |
+| `tests/test_pptx_regeneration.py` | PPTX再生成のテスト |
+| `tests/test_security.py` | セキュリティ回帰テスト |
+| `tests/test_utils.py` | ユーティリティ関数のテスト |
+| `tests/fixtures/` | テスト用フィクスチャデータ |
+
+#### 環境変数（テスト用）
+
+| 変数 | 説明 | テスト時の値 |
+|------|------|-------------|
+| `TRANSCRIBE_PROVIDER` | 文字起こしプロバイダー | `mock` |
+| `LLM_PROVIDER` | LLMプロバイダー | `mock` |
+| `DATABASE_URL` | データベースURL | `sqlite:///:memory:` (ユニットテスト) |
+
+### Python バージョン
+
+- **推奨**: Python 3.11+
+- **注意**: Python 3.9/3.10では一部のライブラリ（python-pptx等）の動作が異なる場合があります
 
 ### マイグレーション
 
