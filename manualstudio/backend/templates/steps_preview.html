@@ -80,6 +80,142 @@
         margin-top: 12px;
     }
 
+    /* Edit mode styles */
+    .edit-controls {
+        display: flex;
+        gap: 12px;
+        align-items: center;
+    }
+
+    .edit-field {
+        display: none;
+    }
+
+    .edit-mode .view-field {
+        display: none;
+    }
+
+    .edit-mode .edit-field {
+        display: block;
+    }
+
+    .edit-input, .edit-textarea {
+        width: 100%;
+        padding: 8px 12px;
+        border: 2px solid #667eea;
+        border-radius: 6px;
+        font-size: inherit;
+        font-family: inherit;
+    }
+
+    .edit-textarea {
+        min-height: 60px;
+        resize: vertical;
+    }
+
+    .edit-input-small {
+        width: 80px;
+    }
+
+    .version-info {
+        display: flex;
+        align-items: center;
+        gap: 8px;
+        color: #666;
+        font-size: 0.9rem;
+    }
+
+    .version-badge {
+        background: #e9ecef;
+        padding: 2px 8px;
+        border-radius: 4px;
+        font-weight: 500;
+    }
+
+    .btn-edit {
+        background: #6c757d;
+        color: white;
+    }
+
+    .btn-edit.active {
+        background: #dc3545;
+    }
+
+    .btn-save {
+        background: #28a745;
+        color: white;
+    }
+
+    .btn-regenerate {
+        background: #17a2b8;
+        color: white;
+    }
+
+    .loading-overlay {
+        position: fixed;
+        top: 0;
+        left: 0;
+        right: 0;
+        bottom: 0;
+        background: rgba(0,0,0,0.5);
+        display: none;
+        align-items: center;
+        justify-content: center;
+        z-index: 1000;
+    }
+
+    .loading-overlay.active {
+        display: flex;
+    }
+
+    .loading-spinner {
+        background: white;
+        padding: 40px;
+        border-radius: 8px;
+        text-align: center;
+    }
+
+    .spinner {
+        width: 40px;
+        height: 40px;
+        border: 4px solid #f3f3f3;
+        border-top: 4px solid #667eea;
+        border-radius: 50%;
+        animation: spin 1s linear infinite;
+        margin: 0 auto 16px;
+    }
+
+    @keyframes spin {
+        0% { transform: rotate(0deg); }
+        100% { transform: rotate(360deg); }
+    }
+
+    .toast {
+        position: fixed;
+        bottom: 20px;
+        right: 20px;
+        padding: 16px 24px;
+        border-radius: 8px;
+        color: white;
+        z-index: 1001;
+        opacity: 0;
+        transform: translateY(20px);
+        transition: all 0.3s;
+    }
+
+    .toast.show {
+        opacity: 1;
+        transform: translateY(0);
+    }
+
+    .toast.success {
+        background: #28a745;
+    }
+
+    .toast.error {
+        background: #dc3545;
+    }
+
     @media (max-width: 768px) {
         .step-card {
             flex-direction: column;
@@ -94,22 +230,45 @@
 
 {% block content %}
 <div class="card">
-    <div class="flex" style="align-items: center; justify-content: space-between;">
+    <div class="flex" style="align-items: center; justify-content: space-between; flex-wrap: wrap; gap: 12px;">
         <div>
-            <h2>{{ steps_data.title }}</h2>
+            <div class="view-field">
+                <h2 id="title-view">{{ steps_data.title }}</h2>
+            </div>
+            <div class="edit-field">
+                <input type="text" class="edit-input" id="title-edit" value="{{ steps_data.title }}" placeholder="タイトル">
+            </div>
             {% if steps_data.goal %}
-            <p style="color: #666; margin-top: 8px;">{{ steps_data.goal }}</p>
+            <div class="view-field">
+                <p style="color: #666; margin-top: 8px;" id="goal-view">{{ steps_data.goal }}</p>
+            </div>
+            <div class="edit-field">
+                <input type="text" class="edit-input" id="goal-edit" value="{{ steps_data.goal }}" placeholder="目的" style="margin-top: 8px;">
+            </div>
             {% endif %}
+            <div class="version-info mt-4">
+                <span>バージョン:</span>
+                <span class="version-badge">v{{ job.current_steps_version }}</span>
+            </div>
         </div>
-        <div>
+        <div class="edit-controls">
+            <button type="button" id="editToggle" class="btn btn-edit" onclick="toggleEditMode()">
+                編集モード
+            </button>
+            <button type="button" id="saveBtn" class="btn btn-save" onclick="saveSteps()" style="display: none;">
+                保存
+            </button>
+            <button type="button" id="regenerateBtn" class="btn btn-regenerate" onclick="regeneratePptx()">
+                PPTX再生成
+            </button>
             <a href="/api/jobs/{{ job.id }}/download/pptx" class="btn btn-primary">PPTXダウンロード</a>
         </div>
     </div>
 </div>
 
-<div class="card" style="padding: 0;">
+<div class="card" style="padding: 0;" id="stepsContainer">
     {% for step in steps_data.steps %}
-    <div class="step-card">
+    <div class="step-card" data-step-index="{{ loop.index0 }}">
         <div class="step-image">
             <img src="/api/jobs/{{ job.id }}/frames/{{ step.frame_file }}"
                  alt="Step {{ step.no }}"
@@ -118,27 +277,58 @@
         <div class="step-content">
             <div class="step-header">
                 <div class="step-number">{{ step.no }}</div>
-                <span class="step-time">{{ step.start }} - {{ step.end }}</span>
+                <div class="view-field">
+                    <span class="step-time">{{ step.start }} - {{ step.end }}</span>
+                </div>
+                <div class="edit-field">
+                    <input type="text" class="edit-input edit-input-small step-start" value="{{ step.start }}" placeholder="開始">
+                    <span>-</span>
+                    <input type="text" class="edit-input edit-input-small step-end" value="{{ step.end }}" placeholder="終了">
+                </div>
             </div>
 
-            <div class="step-telop">{{ step.telop }}</div>
+            <div class="view-field">
+                <div class="step-telop">{{ step.telop }}</div>
+            </div>
+            <div class="edit-field">
+                <input type="text" class="edit-input step-telop-edit" value="{{ step.telop }}" placeholder="テロップ（15文字以内）" maxlength="30">
+            </div>
 
             <div class="step-action">
-                <strong>操作:</strong> {{ step.action }}
-                {% if step.target and step.target != 'unknown' %}
-                <br><strong>対象:</strong> {{ step.target }}
-                {% endif %}
+                <div class="view-field">
+                    <strong>操作:</strong> <span class="step-action-text">{{ step.action }}</span>
+                    {% if step.target and step.target != 'unknown' %}
+                    <br><strong>対象:</strong> <span class="step-target-text">{{ step.target }}</span>
+                    {% endif %}
+                </div>
+                <div class="edit-field">
+                    <div class="mb-4">
+                        <label><strong>操作:</strong></label>
+                        <textarea class="edit-textarea step-action-edit" placeholder="操作の説明">{{ step.action }}</textarea>
+                    </div>
+                    <div>
+                        <label><strong>対象:</strong></label>
+                        <input type="text" class="edit-input step-target-edit" value="{{ step.target or '' }}" placeholder="操作対象">
+                    </div>
+                </div>
             </div>
 
-            <div class="step-narration">
-                {{ step.narration }}
+            <div class="view-field">
+                <div class="step-narration">{{ step.narration }}</div>
+            </div>
+            <div class="edit-field">
+                <textarea class="edit-textarea step-narration-edit" placeholder="ナレーション">{{ step.narration }}</textarea>
             </div>
 
             {% if step.caution %}
-            <div class="step-caution">
+            <div class="step-caution view-field">
                 <strong>注意:</strong> {{ step.caution }}
             </div>
             {% endif %}
+            <div class="edit-field" style="margin-top: 12px;">
+                <label><strong>注意事項:</strong></label>
+                <input type="text" class="edit-input step-caution-edit" value="{{ step.caution or '' }}" placeholder="注意事項（任意）">
+            </div>
         </div>
     </div>
     {% endfor %}
@@ -191,4 +381,170 @@
 <div class="mt-4">
     <a href="/jobs/{{ job.id }}" class="btn btn-secondary">戻る</a>
 </div>
+
+<!-- Loading Overlay -->
+<div class="loading-overlay" id="loadingOverlay">
+    <div class="loading-spinner">
+        <div class="spinner"></div>
+        <p id="loadingText">処理中...</p>
+    </div>
+</div>
+
+<!-- Toast Notification -->
+<div class="toast" id="toast"></div>
+{% endblock %}
+
+{% block extra_js %}
+<script>
+    const jobId = '{{ job.id }}';
+    let isEditMode = false;
+    let originalStepsData = {{ steps_data | tojson | safe }};
+
+    function toggleEditMode() {
+        isEditMode = !isEditMode;
+        const container = document.body;
+        const editBtn = document.getElementById('editToggle');
+        const saveBtn = document.getElementById('saveBtn');
+
+        if (isEditMode) {
+            container.classList.add('edit-mode');
+            editBtn.textContent = '編集を終了';
+            editBtn.classList.add('active');
+            saveBtn.style.display = 'inline-block';
+        } else {
+            container.classList.remove('edit-mode');
+            editBtn.textContent = '編集モード';
+            editBtn.classList.remove('active');
+            saveBtn.style.display = 'none';
+        }
+    }
+
+    function collectStepsData() {
+        const stepsData = JSON.parse(JSON.stringify(originalStepsData));
+
+        // Update title and goal
+        const titleEdit = document.getElementById('title-edit');
+        const goalEdit = document.getElementById('goal-edit');
+        if (titleEdit) stepsData.title = titleEdit.value;
+        if (goalEdit) stepsData.goal = goalEdit.value;
+
+        // Update steps
+        const stepCards = document.querySelectorAll('.step-card');
+        stepCards.forEach((card, index) => {
+            if (stepsData.steps[index]) {
+                const step = stepsData.steps[index];
+
+                const startInput = card.querySelector('.step-start');
+                const endInput = card.querySelector('.step-end');
+                const telopInput = card.querySelector('.step-telop-edit');
+                const actionInput = card.querySelector('.step-action-edit');
+                const targetInput = card.querySelector('.step-target-edit');
+                const narrationInput = card.querySelector('.step-narration-edit');
+                const cautionInput = card.querySelector('.step-caution-edit');
+
+                if (startInput) step.start = startInput.value;
+                if (endInput) step.end = endInput.value;
+                if (telopInput) step.telop = telopInput.value;
+                if (actionInput) step.action = actionInput.value;
+                if (targetInput) step.target = targetInput.value || 'unknown';
+                if (narrationInput) step.narration = narrationInput.value;
+                if (cautionInput) {
+                    if (cautionInput.value) {
+                        step.caution = cautionInput.value;
+                    } else {
+                        delete step.caution;
+                    }
+                }
+            }
+        });
+
+        return stepsData;
+    }
+
+    function showLoading(text) {
+        document.getElementById('loadingText').textContent = text || '処理中...';
+        document.getElementById('loadingOverlay').classList.add('active');
+    }
+
+    function hideLoading() {
+        document.getElementById('loadingOverlay').classList.remove('active');
+    }
+
+    function showToast(message, type) {
+        const toast = document.getElementById('toast');
+        toast.textContent = message;
+        toast.className = 'toast ' + type + ' show';
+        setTimeout(() => {
+            toast.classList.remove('show');
+        }, 3000);
+    }
+
+    async function saveSteps() {
+        const stepsData = collectStepsData();
+
+        showLoading('保存中...');
+
+        try {
+            const response = await fetch(`/api/jobs/${jobId}/steps`, {
+                method: 'PUT',
+                headers: {
+                    'Content-Type': 'application/json',
+                },
+                body: JSON.stringify({
+                    steps_json: stepsData,
+                    edit_note: 'UI編集'
+                })
+            });
+
+            const data = await response.json();
+
+            if (response.ok) {
+                showToast(`保存しました (v${data.version})`, 'success');
+                // Update original data
+                originalStepsData = stepsData;
+                // Reload page to show new version
+                setTimeout(() => {
+                    window.location.reload();
+                }, 1000);
+            } else {
+                const errorMsg = data.detail?.message || data.detail || '保存に失敗しました';
+                showToast(errorMsg, 'error');
+            }
+        } catch (error) {
+            showToast('エラーが発生しました: ' + error.message, 'error');
+        } finally {
+            hideLoading();
+        }
+    }
+
+    async function regeneratePptx() {
+        if (!confirm('PPTXを再生成しますか？\n現在のステップデータを使用して新しいPPTXを生成します。')) {
+            return;
+        }
+
+        showLoading('PPTX再生成を開始中...');
+
+        try {
+            const response = await fetch(`/api/jobs/${jobId}/regenerate/pptx`, {
+                method: 'POST'
+            });
+
+            const data = await response.json();
+
+            if (response.ok) {
+                showToast('PPTX再生成を開始しました', 'success');
+                // Redirect to job detail page to monitor progress
+                setTimeout(() => {
+                    window.location.href = `/jobs/${jobId}`;
+                }, 1500);
+            } else {
+                showToast(data.detail || 'エラーが発生しました', 'error');
+            }
+        } catch (error) {
+            showToast('エラーが発生しました: ' + error.message, 'error');
+        } finally {
+            hideLoading();
+        }
+    }
+</script>
 {% endblock %}

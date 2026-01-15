@@ -1,10 +1,14 @@
 """API routes for ManualStudio."""
+import json
 import os
 import uuid
+from datetime import datetime
 from typing import Optional
+from urllib.parse import quote
 
-from fastapi import APIRouter, Depends, File, Form, HTTPException, UploadFile
+from fastapi import APIRouter, Depends, File, Form, HTTPException, UploadFile, Body
 from fastapi.responses import JSONResponse, RedirectResponse
+from pydantic import BaseModel
 from sqlalchemy.orm import Session
 
 from app.core.config import get_settings
@@ -14,14 +18,27 @@ from app.core.exceptions import (
     VideoTooLongError,
     UnsupportedFormatError,
     JobNotFoundError,
+    ErrorCode,
 )
-from app.db import get_db, Job, JobStatus
+from app.db import get_db, Job, JobStatus, StepsVersion
 from app.services.storage import get_storage_service
+from app.services.llm import validate_steps_json, LLMValidationError
 from app.workers.celery_app import celery_app
 
 logger = get_logger(__name__)
 router = APIRouter(prefix="/api")
 settings = get_settings()
+
+
+class StepsUpdateRequest(BaseModel):
+    """Request body for updating steps."""
+    steps_json: dict
+    edit_note: Optional[str] = None
+
+
+def _build_content_disposition(filename: str) -> str:
+    safe_name = quote(filename, safe="")
+    return f"attachment; filename*=UTF-8''{safe_name}"
 
 
 @router.post("/jobs")
@@ -92,11 +109,24 @@ async def create_job(
     db.commit()
 
     # Queue the processing task
-    celery_app.send_task(
-        "app.workers.tasks.process_video",
-        args=[str(job_id)],
-        task_id=str(job_id)
-    )
+    try:
+        celery_app.send_task(
+            "app.workers.tasks.process_video",
+            args=[str(job_id)],
+            task_id=str(job_id)
+        )
+    except Exception as e:
+        logger.error(f"Failed to queue job {job_id}: {e}")
+        job.status = JobStatus.FAILED
+        job.error_code = "QUEUE_ERROR"
+        job.error_message = str(e)
+        job.updated_at = datetime.utcnow()
+        db.commit()
+        try:
+            storage.delete_object(video_key)
+        except Exception as cleanup_error:
+            logger.warning(f"Failed to cleanup uploaded video: {cleanup_error}")
+        raise HTTPException(status_code=500, detail="Failed to queue processing task")
 
     logger.info(f"Job created: {job_id}")
 
@@ -139,6 +169,7 @@ async def get_job(job_id: str, db: Session = Depends(get_db)):
         "language": job.language,
         "created_at": job.created_at.isoformat() if job.created_at else None,
         "updated_at": job.updated_at.isoformat() if job.updated_at else None,
+        "current_steps_version": job.current_steps_version,
     }
 
     if job.status == JobStatus.FAILED:
@@ -162,8 +193,17 @@ async def get_job(job_id: str, db: Session = Depends(get_db)):
 
 
 @router.get("/jobs/{job_id}/steps")
-async def get_job_steps(job_id: str, db: Session = Depends(get_db)):
-    """Get steps.json for a job."""
+async def get_job_steps(
+    job_id: str,
+    version: Optional[int] = None,
+    db: Session = Depends(get_db)
+):
+    """
+    Get steps.json for a job.
+
+    Args:
+        version: Optional specific version to retrieve. Defaults to current version.
+    """
     try:
         job_uuid = uuid.UUID(job_id)
     except ValueError:
@@ -173,6 +213,22 @@ async def get_job_steps(job_id: str, db: Session = Depends(get_db)):
     if not job:
         raise HTTPException(status_code=404, detail="Job not found")
 
+    # Try to get from steps_versions first
+    target_version = version or job.current_steps_version
+    steps_version = db.query(StepsVersion).filter(
+        StepsVersion.job_id == job_uuid,
+        StepsVersion.version == target_version
+    ).first()
+
+    if steps_version:
+        return {
+            "version": steps_version.version,
+            "edit_source": steps_version.edit_source,
+            "created_at": steps_version.created_at.isoformat() if steps_version.created_at else None,
+            "steps_json": steps_version.steps_json,
+        }
+
+    # Fallback to storage
     if not job.steps_json_uri:
         raise HTTPException(status_code=404, detail="Steps not yet generated")
 
@@ -180,11 +236,191 @@ async def get_job_steps(job_id: str, db: Session = Depends(get_db)):
         storage = get_storage_service()
         key = storage.key_from_uri(job.steps_json_uri)
         content = storage.download_bytes(key)
-        import json
-        return json.loads(content)
+        return {
+            "version": 1,
+            "edit_source": "llm",
+            "steps_json": json.loads(content),
+        }
     except Exception as e:
         logger.error(f"Failed to download steps.json: {e}")
         raise HTTPException(status_code=500, detail="Failed to retrieve steps")
+
+
+@router.put("/jobs/{job_id}/steps")
+async def update_job_steps(
+    job_id: str,
+    request: StepsUpdateRequest,
+    db: Session = Depends(get_db)
+):
+    """
+    Update steps.json for a job.
+
+    - Validates the new steps against JSON schema
+    - Creates a new version in steps_versions
+    - Updates the storage with the new steps
+    - Does NOT regenerate PPTX (use /regenerate/pptx for that)
+    """
+    try:
+        job_uuid = uuid.UUID(job_id)
+    except ValueError:
+        raise HTTPException(status_code=400, detail="Invalid job ID format")
+
+    job = db.query(Job).filter(Job.id == job_uuid).first()
+    if not job:
+        raise HTTPException(status_code=404, detail="Job not found")
+
+    if job.status != JobStatus.SUCCEEDED:
+        raise HTTPException(
+            status_code=400,
+            detail=f"Cannot edit steps for job in {job.status.value} status. Job must be SUCCEEDED."
+        )
+
+    # Validate steps.json schema
+    try:
+        validate_steps_json(request.steps_json)
+    except LLMValidationError as e:
+        raise HTTPException(
+            status_code=400,
+            detail={
+                "error_code": ErrorCode.STEPS_SCHEMA_INVALID.value,
+                "message": str(e)
+            }
+        )
+
+    # Get current max version
+    max_version = db.query(StepsVersion).filter(
+        StepsVersion.job_id == job_uuid
+    ).count()
+    new_version = max_version + 1
+
+    # Create new steps version
+    steps_version = StepsVersion(
+        job_id=job_uuid,
+        version=new_version,
+        steps_json=request.steps_json,
+        edit_source="manual",
+        edit_note=request.edit_note,
+    )
+    db.add(steps_version)
+
+    # Update job's current version
+    job.current_steps_version = new_version
+    job.updated_at = datetime.utcnow()
+
+    # Upload new steps.json to storage
+    try:
+        storage = get_storage_service()
+        steps_key = f"jobs/{job_id}/steps_v{new_version}.json"
+        steps_bytes = json.dumps(request.steps_json, ensure_ascii=False, indent=2).encode("utf-8")
+        storage.upload_bytes(steps_bytes, steps_key, "application/json")
+
+        # Update main steps.json URI
+        job.steps_json_uri = f"s3://{settings.s3_bucket}/{steps_key}"
+    except Exception as e:
+        logger.error(f"Failed to upload steps.json: {e}")
+        db.rollback()
+        raise HTTPException(status_code=500, detail="Failed to save steps")
+
+    db.commit()
+
+    logger.info(f"Steps updated for job {job_id}, version {new_version}")
+
+    return {
+        "job_id": str(job_id),
+        "version": new_version,
+        "message": "Steps updated successfully. Use /regenerate/pptx to regenerate the PowerPoint."
+    }
+
+
+@router.post("/jobs/{job_id}/regenerate/pptx")
+async def regenerate_pptx(job_id: str, db: Session = Depends(get_db)):
+    """
+    Regenerate PPTX from current steps.json.
+
+    - Uses existing frames (does not re-extract)
+    - Uses current steps version
+    - Queues a PPTX-only generation task
+    """
+    try:
+        job_uuid = uuid.UUID(job_id)
+    except ValueError:
+        raise HTTPException(status_code=400, detail="Invalid job ID format")
+
+    job = db.query(Job).filter(Job.id == job_uuid).first()
+    if not job:
+        raise HTTPException(status_code=404, detail="Job not found")
+
+    if job.status != JobStatus.SUCCEEDED:
+        raise HTTPException(
+            status_code=400,
+            detail=f"Cannot regenerate PPTX for job in {job.status.value} status. Job must be SUCCEEDED."
+        )
+
+    if not job.frames_prefix_uri:
+        raise HTTPException(status_code=400, detail="No frames available for this job")
+
+    if not job.steps_json_uri:
+        raise HTTPException(status_code=400, detail="No steps available for this job")
+
+    # Generate new trace ID
+    trace_id = str(uuid.uuid4())[:8]
+
+    # Update job status for regeneration
+    job.status = JobStatus.RUNNING
+    job.stage = "GENERATE_PPTX_ONLY"
+    job.progress = 0
+    job.error_code = None
+    job.error_message = None
+    job.trace_id = trace_id
+    db.commit()
+
+    # Queue the PPTX regeneration task
+    task_id = f"{job_id}-pptx-{trace_id}"
+    celery_app.send_task(
+        "app.workers.tasks.regenerate_pptx",
+        args=[str(job_id)],
+        task_id=task_id
+    )
+
+    logger.info(f"PPTX regeneration queued for job {job_id}")
+
+    return {
+        "job_id": str(job_id),
+        "status": "RUNNING",
+        "task_id": task_id,
+        "message": "PPTX regeneration started"
+    }
+
+
+@router.get("/jobs/{job_id}/steps/versions")
+async def get_steps_versions(job_id: str, db: Session = Depends(get_db)):
+    """Get all versions of steps.json for a job."""
+    try:
+        job_uuid = uuid.UUID(job_id)
+    except ValueError:
+        raise HTTPException(status_code=400, detail="Invalid job ID format")
+
+    job = db.query(Job).filter(Job.id == job_uuid).first()
+    if not job:
+        raise HTTPException(status_code=404, detail="Job not found")
+
+    versions = db.query(StepsVersion).filter(
+        StepsVersion.job_id == job_uuid
+    ).order_by(StepsVersion.version.desc()).all()
+
+    return {
+        "job_id": str(job_id),
+        "current_version": job.current_steps_version,
+        "versions": [
+            {
+                "version": v.version,
+                "created_at": v.created_at.isoformat() if v.created_at else None,
+                "edit_source": v.edit_source,
+                "edit_note": v.edit_note,
+            }
+            for v in versions
+        ]
+    }
 
 
 @router.get("/jobs/{job_id}/download/pptx")
@@ -210,7 +446,7 @@ async def download_pptx(job_id: str, db: Session = Depends(get_db)):
             key,
             expires_in=3600,
             response_content_type="application/vnd.openxmlformats-officedocument.presentationml.presentation",
-            response_content_disposition=f'attachment; filename="{filename}.pptx"'
+            response_content_disposition=_build_content_disposition(f"{filename}.pptx")
         )
         return RedirectResponse(url=url)
     except Exception as e:
@@ -251,7 +487,7 @@ async def download_frames(job_id: str, db: Session = Depends(get_db)):
             zip_key,
             expires_in=3600,
             response_content_type="application/zip",
-            response_content_disposition=f'attachment; filename="{filename}.zip"'
+            response_content_disposition=_build_content_disposition(f"{filename}.zip")
         )
         return RedirectResponse(url=url)
     except Exception as e:
@@ -277,7 +513,11 @@ async def get_frame(job_id: str, frame_file: str, db: Session = Depends(get_db))
     try:
         storage = get_storage_service()
         frames_prefix = storage.key_from_uri(job.frames_prefix_uri)
-        frame_key = f"{frames_prefix}{frame_file}"
+        normalized_frame = os.path.basename(frame_file)
+        if normalized_frame != frame_file:
+            raise HTTPException(status_code=400, detail="Invalid frame filename")
+
+        frame_key = f"{frames_prefix}{normalized_frame}"
 
         url = storage.get_presigned_url(
             frame_key,

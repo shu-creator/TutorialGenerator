@@ -1,16 +1,21 @@
 """LLM service for generating steps.json."""
 import json
+import os
 from abc import ABC, abstractmethod
 from functools import lru_cache
+from pathlib import Path
 from typing import Optional
 
 import jsonschema
 
 from app.core.config import get_settings
 from app.core.logging import get_logger
-from app.core.exceptions import LLMError, LLMValidationError
+from app.core.exceptions import LLMError, LLMValidationError, ErrorCode
 
 logger = get_logger(__name__)
+
+# Path to fixtures directory
+FIXTURES_DIR = Path(__file__).parent.parent.parent / "tests" / "fixtures"
 
 
 # JSON Schema for steps.json validation
@@ -43,7 +48,7 @@ STEPS_JSON_SCHEMA = {
                     "end": {"type": "string", "pattern": "^[0-9]{2}:[0-9]{2}$"},
                     "shot": {"type": "string", "pattern": "^[0-9]{2}:[0-9]{2}$"},
                     "frame_file": {"type": "string"},
-                    "telop": {"type": "string", "maxLength": 20},
+                    "telop": {"type": "string", "maxLength": 30},
                     "action": {"type": "string"},
                     "target": {"type": "string"},
                     "narration": {"type": "string"},
@@ -149,7 +154,10 @@ class OpenAILLMProvider(LLMProvider):
     def __init__(self):
         settings = get_settings()
         if not settings.openai_api_key:
-            raise LLMError("OPENAI_API_KEY not configured")
+            raise LLMError(
+                "OPENAI_API_KEY not configured",
+                ErrorCode.LLM_PROVIDER_ERROR.value
+            )
 
         from openai import OpenAI
         self.client = OpenAI(api_key=settings.openai_api_key)
@@ -175,7 +183,10 @@ class OpenAILLMProvider(LLMProvider):
 
         except Exception as e:
             logger.error(f"OpenAI API call failed: {e}")
-            raise LLMError(f"OpenAI API call failed: {e}")
+            raise LLMError(
+                f"OpenAI API call failed: {e}",
+                ErrorCode.LLM_PROVIDER_ERROR.value
+            )
 
 
 class AnthropicLLMProvider(LLMProvider):
@@ -184,7 +195,10 @@ class AnthropicLLMProvider(LLMProvider):
     def __init__(self):
         settings = get_settings()
         if not settings.anthropic_api_key:
-            raise LLMError("ANTHROPIC_API_KEY not configured")
+            raise LLMError(
+                "ANTHROPIC_API_KEY not configured",
+                ErrorCode.LLM_PROVIDER_ERROR.value
+            )
 
         import anthropic
         self.client = anthropic.Anthropic(api_key=settings.anthropic_api_key)
@@ -208,18 +222,42 @@ class AnthropicLLMProvider(LLMProvider):
 
         except Exception as e:
             logger.error(f"Anthropic API call failed: {e}")
-            raise LLMError(f"Anthropic API call failed: {e}")
+            raise LLMError(
+                f"Anthropic API call failed: {e}",
+                ErrorCode.LLM_PROVIDER_ERROR.value
+            )
 
 
 class MockLLMProvider(LLMProvider):
-    """Mock provider for testing."""
+    """Mock provider for testing - loads from fixture file."""
+
+    def __init__(self, fixture_path: Optional[str] = None):
+        """
+        Initialize mock provider.
+
+        Args:
+            fixture_path: Optional path to fixture file. Defaults to tests/fixtures/steps.json
+        """
+        self.fixture_path = fixture_path or str(FIXTURES_DIR / "steps.json")
 
     @property
     def name(self) -> str:
         return "mock"
 
     def generate(self, prompt: str, system_prompt: str) -> str:
-        """Return mock response."""
+        """Return steps.json from fixture file."""
+        logger.info("Mock LLM generating steps.json from fixture")
+
+        try:
+            if os.path.exists(self.fixture_path):
+                with open(self.fixture_path, "r", encoding="utf-8") as f:
+                    data = json.load(f)
+                    logger.info(f"Loaded steps from fixture: {len(data.get('steps', []))} steps")
+                    return json.dumps(data, ensure_ascii=False)
+        except Exception as e:
+            logger.warning(f"Failed to load fixture, using default: {e}")
+
+        # Fallback to hardcoded mock data
         return json.dumps({
             "title": "テスト手順書",
             "goal": "テスト用のサンプル",
@@ -246,7 +284,7 @@ class MockLLMProvider(LLMProvider):
             ],
             "common_mistakes": [],
             "quiz": []
-        })
+        }, ensure_ascii=False)
 
 
 class LLMService:
@@ -263,7 +301,10 @@ class LLMService:
         elif provider_name == "mock":
             self._provider = MockLLMProvider()
         else:
-            raise LLMError(f"Unknown LLM provider: {provider_name}")
+            raise LLMError(
+                f"Unknown LLM provider: {provider_name}",
+                ErrorCode.LLM_PROVIDER_ERROR.value
+            )
 
     @property
     def provider_name(self) -> str:
@@ -415,6 +456,22 @@ JSONのみを出力してください。"""
             raise LLMValidationError(f"Schema validation failed: {e.message}")
 
         return data
+
+
+def validate_steps_json(data: dict) -> None:
+    """
+    Validate steps.json against schema.
+
+    Args:
+        data: steps.json data to validate
+
+    Raises:
+        LLMValidationError: If validation fails
+    """
+    try:
+        jsonschema.validate(data, STEPS_JSON_SCHEMA)
+    except jsonschema.ValidationError as e:
+        raise LLMValidationError(f"Schema validation failed: {e.message}")
 
 
 def get_llm_service(provider: Optional[str] = None) -> LLMService:

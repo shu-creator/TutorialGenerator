@@ -1,15 +1,20 @@
 """Transcription service with provider abstraction."""
+import json
 import os
 from abc import ABC, abstractmethod
 from dataclasses import dataclass
 from functools import lru_cache
+from pathlib import Path
 from typing import Optional
 
 from app.core.config import get_settings
 from app.core.logging import get_logger
-from app.core.exceptions import TranscriptionError
+from app.core.exceptions import TranscriptionError, ErrorCode
 
 logger = get_logger(__name__)
+
+# Path to fixtures directory
+FIXTURES_DIR = Path(__file__).parent.parent.parent / "tests" / "fixtures"
 
 
 @dataclass
@@ -54,7 +59,10 @@ class OpenAITranscriptionProvider(TranscriptionProvider):
     def __init__(self):
         settings = get_settings()
         if not settings.openai_api_key:
-            raise TranscriptionError("OPENAI_API_KEY not configured")
+            raise TranscriptionError(
+                "OPENAI_API_KEY not configured",
+                ErrorCode.TRANSCRIBE_PROVIDER_ERROR.value
+            )
 
         from openai import OpenAI
         self.client = OpenAI(api_key=settings.openai_api_key)
@@ -95,11 +103,23 @@ class OpenAITranscriptionProvider(TranscriptionProvider):
 
         except Exception as e:
             logger.error(f"Transcription failed: {e}")
-            raise TranscriptionError(f"Transcription failed: {e}")
+            raise TranscriptionError(
+                f"Transcription failed: {e}",
+                ErrorCode.TRANSCRIBE_FAILED.value
+            )
 
 
 class MockTranscriptionProvider(TranscriptionProvider):
-    """Mock provider for testing."""
+    """Mock provider for testing - loads from fixture file."""
+
+    def __init__(self, fixture_path: Optional[str] = None):
+        """
+        Initialize mock provider.
+
+        Args:
+            fixture_path: Optional path to fixture file. Defaults to tests/fixtures/transcript.json
+        """
+        self.fixture_path = fixture_path or str(FIXTURES_DIR / "transcript.json")
 
     @property
     def name(self) -> str:
@@ -110,7 +130,27 @@ class MockTranscriptionProvider(TranscriptionProvider):
         audio_path: str,
         language: str = "ja"
     ) -> list[TranscriptSegment]:
-        """Return mock transcript."""
+        """Return transcript from fixture file."""
+        logger.info(f"Mock transcription for: {audio_path}")
+
+        try:
+            if os.path.exists(self.fixture_path):
+                with open(self.fixture_path, "r", encoding="utf-8") as f:
+                    data = json.load(f)
+                    segments = [
+                        TranscriptSegment(
+                            start_sec=seg["start_sec"],
+                            end_sec=seg["end_sec"],
+                            text=seg["text"]
+                        )
+                        for seg in data
+                    ]
+                    logger.info(f"Loaded {len(segments)} segments from fixture")
+                    return segments
+        except Exception as e:
+            logger.warning(f"Failed to load fixture, using default: {e}")
+
+        # Fallback to hardcoded mock data
         return [
             TranscriptSegment(0, 5, "これはテスト用のサンプルテキストです。"),
             TranscriptSegment(5, 10, "画面の操作を説明します。"),
@@ -130,7 +170,10 @@ class TranscriptionService:
         elif provider_name == "mock":
             self._provider = MockTranscriptionProvider()
         else:
-            raise TranscriptionError(f"Unknown transcription provider: {provider_name}")
+            raise TranscriptionError(
+                f"Unknown transcription provider: {provider_name}",
+                ErrorCode.TRANSCRIBE_PROVIDER_ERROR.value
+            )
 
     @property
     def provider_name(self) -> str:
