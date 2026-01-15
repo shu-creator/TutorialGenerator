@@ -6,11 +6,13 @@ import json
 import os
 import uuid
 from datetime import datetime
+from typing import Literal
 from urllib.parse import quote
 
-from fastapi import APIRouter, Depends, File, Form, HTTPException, UploadFile
+from fastapi import APIRouter, Depends, File, Form, HTTPException, Query, UploadFile
 from fastapi.responses import JSONResponse, RedirectResponse
 from pydantic import BaseModel
+from sqlalchemy import or_
 from sqlalchemy.orm import Session
 
 from app.core.config import get_settings
@@ -32,6 +34,9 @@ from app.workers.celery_app import celery_app
 logger = get_logger(__name__)
 router = APIRouter(prefix="/api")
 settings = get_settings()
+
+# Allowed video extensions
+ALLOWED_VIDEO_EXTENSIONS = {".mp4", ".mov", ".avi", ".mkv", ".webm"}
 
 
 class StepsUpdateRequest(BaseModel):
@@ -139,6 +144,188 @@ async def create_job(
             "job_id": str(job_id),
             "status": job.status.value,
             "message": "Job created and queued for processing",
+        },
+    )
+
+
+@router.get("/jobs")
+async def list_jobs(
+    status: str | None = Query(
+        None, description="Filter by status (QUEUED, RUNNING, SUCCEEDED, FAILED, CANCELED)"
+    ),
+    q: str | None = Query(None, description="Search query for title/goal"),
+    page: int = Query(1, ge=1, description="Page number"),
+    page_size: int = Query(20, ge=1, le=100, description="Items per page"),
+    sort: Literal["created_at", "-created_at"] = Query("-created_at", description="Sort order"),
+    db: Session = Depends(get_db),
+):
+    """
+    List jobs with filtering, search, and pagination.
+
+    - status: Filter by job status
+    - q: Search in title and goal fields
+    - page: Page number (1-indexed)
+    - page_size: Number of items per page (max 100)
+    - sort: Sort by created_at (prefix with - for descending)
+    """
+    query = db.query(Job)
+
+    # Filter by status
+    if status:
+        status_upper = status.upper()
+        try:
+            job_status = JobStatus(status_upper)
+            query = query.filter(Job.status == job_status)
+        except ValueError:
+            raise HTTPException(
+                status_code=400,
+                detail=f"Invalid status: {status}. Valid values: {', '.join([s.value for s in JobStatus])}",
+            )
+
+    # Search in title and goal
+    if q:
+        search_pattern = f"%{q}%"
+        query = query.filter(
+            or_(
+                Job.title.ilike(search_pattern),
+                Job.goal.ilike(search_pattern),
+            )
+        )
+
+    # Get total count
+    total = query.count()
+
+    # Apply sorting
+    if sort == "-created_at":
+        query = query.order_by(Job.created_at.desc())
+    else:
+        query = query.order_by(Job.created_at.asc())
+
+    # Apply pagination
+    offset = (page - 1) * page_size
+    jobs = query.offset(offset).limit(page_size).all()
+
+    return {
+        "items": [job.to_dict() for job in jobs],
+        "total": total,
+        "page": page,
+        "page_size": page_size,
+        "total_pages": (total + page_size - 1) // page_size if total > 0 else 0,
+    }
+
+
+@router.post("/jobs/batch")
+async def create_batch_jobs(
+    video_files: list[UploadFile] = File(..., description="Multiple video files"),
+    title_prefix: str | None = Form(None, description="Title prefix for all jobs"),
+    goal: str | None = Form(None, description="Goal for all jobs"),
+    language: str = Form("ja", description="Language for all jobs"),
+    db: Session = Depends(get_db),
+):
+    """
+    Create multiple jobs from multiple video files.
+
+    - Uploads multiple video files at once
+    - Creates a job for each file
+    - Returns list of created job IDs
+    """
+    if not video_files:
+        raise HTTPException(status_code=400, detail="No video files provided")
+
+    if len(video_files) > 10:
+        raise HTTPException(status_code=400, detail="Maximum 10 files per batch")
+
+    created_jobs = []
+    errors = []
+
+    for idx, video_file in enumerate(video_files):
+        try:
+            # Generate trace ID for this job
+            trace_id = str(uuid.uuid4())[:8]
+
+            # Validate file extension
+            filename = video_file.filename or f"video_{idx}.mp4"
+            ext = os.path.splitext(filename)[1].lower()
+            if ext not in ALLOWED_VIDEO_EXTENSIONS:
+                errors.append(
+                    {
+                        "file": filename,
+                        "error": f"Unsupported video format: {ext}",
+                    }
+                )
+                continue
+
+            # Check file size
+            video_file.file.seek(0, 2)
+            file_size = video_file.file.tell()
+            video_file.file.seek(0)
+
+            max_size = settings.max_video_size_bytes
+            if file_size > max_size:
+                errors.append(
+                    {
+                        "file": filename,
+                        "error": f"File too large ({file_size / 1024 / 1024:.1f}MB)",
+                    }
+                )
+                continue
+
+            # Generate title from filename or prefix
+            base_name = os.path.splitext(filename)[0]
+            job_title = f"{title_prefix} - {base_name}" if title_prefix else base_name
+
+            # Create job record
+            job_id = uuid.uuid4()
+            job = Job(
+                id=job_id,
+                status=JobStatus.QUEUED,
+                title=job_title,
+                goal=goal,
+                language=language,
+                trace_id=trace_id,
+            )
+            db.add(job)
+
+            # Upload video to storage
+            storage = get_storage_service()
+            video_key = f"jobs/{job_id}/input{ext}"
+            storage.upload_file(video_file.file, video_key, video_file.content_type)
+            job.input_video_uri = f"s3://{settings.s3_bucket}/{video_key}"
+
+            db.commit()
+
+            # Queue the processing task
+            celery_app.send_task(
+                "app.workers.tasks.process_video", args=[str(job_id)], task_id=str(job_id)
+            )
+
+            created_jobs.append(
+                {
+                    "job_id": str(job_id),
+                    "file": filename,
+                    "status": "QUEUED",
+                }
+            )
+
+            logger.info(f"Batch job created: {job_id} for file {filename}")
+
+        except Exception as e:
+            logger.error(f"Failed to create job for {video_file.filename}: {e}")
+            db.rollback()
+            errors.append(
+                {
+                    "file": video_file.filename or f"file_{idx}",
+                    "error": str(e),
+                }
+            )
+
+    return JSONResponse(
+        status_code=201 if created_jobs else 400,
+        content={
+            "created": created_jobs,
+            "errors": errors,
+            "total_created": len(created_jobs),
+            "total_errors": len(errors),
         },
     )
 
@@ -522,7 +709,12 @@ async def get_frame(job_id: str, frame_file: str, db: Session = Depends(get_db))
 
 @router.post("/jobs/{job_id}/cancel")
 async def cancel_job(job_id: str, db: Session = Depends(get_db)):
-    """Cancel a queued or running job."""
+    """
+    Cancel a queued or running job.
+
+    - Only QUEUED or RUNNING jobs can be canceled
+    - Returns 409 Conflict for invalid state transitions
+    """
     try:
         job_uuid = uuid.UUID(job_id)
     except ValueError:
@@ -534,18 +726,87 @@ async def cancel_job(job_id: str, db: Session = Depends(get_db)):
 
     if job.status not in [JobStatus.QUEUED, JobStatus.RUNNING]:
         raise HTTPException(
-            status_code=400, detail=f"Cannot cancel job in {job.status.value} status"
+            status_code=409,
+            detail=f"Cannot cancel job in {job.status.value} status. Only QUEUED or RUNNING jobs can be canceled.",
         )
 
     # Revoke Celery task
     celery_app.control.revoke(str(job_id), terminate=True)
 
     job.status = JobStatus.CANCELED
+    job.updated_at = datetime.utcnow()
     db.commit()
 
     logger.info(f"Job canceled: {job_id}")
 
-    return {"job_id": str(job_id), "status": "CANCELED"}
+    return {"job_id": str(job_id), "status": "CANCELED", "message": "Job canceled successfully"}
+
+
+@router.post("/jobs/{job_id}/retry")
+async def retry_job(job_id: str, db: Session = Depends(get_db)):
+    """
+    Retry a failed job.
+
+    - Only FAILED jobs can be retried
+    - Re-queues the job from the beginning
+    - Returns 409 Conflict for invalid state transitions
+    """
+    try:
+        job_uuid = uuid.UUID(job_id)
+    except ValueError:
+        raise HTTPException(status_code=400, detail="Invalid job ID format")
+
+    job = db.query(Job).filter(Job.id == job_uuid).first()
+    if not job:
+        raise HTTPException(status_code=404, detail="Job not found")
+
+    if job.status != JobStatus.FAILED:
+        raise HTTPException(
+            status_code=409,
+            detail=f"Cannot retry job in {job.status.value} status. Only FAILED jobs can be retried.",
+        )
+
+    # Check if input video still exists
+    if not job.input_video_uri:
+        raise HTTPException(
+            status_code=400,
+            detail="Cannot retry job: input video not found",
+        )
+
+    # Generate new trace ID
+    trace_id = str(uuid.uuid4())[:8]
+
+    # Reset job state
+    job.status = JobStatus.QUEUED
+    job.stage = None
+    job.progress = 0
+    job.error_code = None
+    job.error_message = None
+    job.trace_id = trace_id
+    job.updated_at = datetime.utcnow()
+    db.commit()
+
+    # Queue the processing task
+    try:
+        celery_app.send_task(
+            "app.workers.tasks.process_video", args=[str(job_id)], task_id=str(job_id)
+        )
+    except Exception as e:
+        logger.error(f"Failed to queue retry for job {job_id}: {e}")
+        job.status = JobStatus.FAILED
+        job.error_code = "QUEUE_ERROR"
+        job.error_message = str(e)
+        db.commit()
+        raise HTTPException(status_code=500, detail="Failed to queue retry task")
+
+    logger.info(f"Job retry queued: {job_id}")
+
+    return {
+        "job_id": str(job_id),
+        "status": "QUEUED",
+        "trace_id": trace_id,
+        "message": "Job queued for retry",
+    }
 
 
 @router.get("/jobs/{job_id}/theme")

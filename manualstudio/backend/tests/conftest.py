@@ -152,17 +152,37 @@ def mock_storage():
 # ============================================================================
 
 
+class MockCeleryApp:
+    """Mock Celery app for testing."""
+
+    def __init__(self):
+        self.control = MagicMock()
+
+    def send_task(self, *args, **kwargs):
+        """Mock send_task - does nothing."""
+        return MagicMock()
+
+
 @pytest.fixture(scope="function")
-def client(override_get_db, mock_storage, test_settings) -> Generator[TestClient, None, None]:
+def mock_celery():
+    """Create mock Celery app."""
+    return MockCeleryApp()
+
+
+@pytest.fixture(scope="function")
+def client(
+    override_get_db, mock_storage, mock_celery, test_settings
+) -> Generator[TestClient, None, None]:
     """Create test client with mocked dependencies."""
     # Override database dependency
     app.dependency_overrides[get_db] = override_get_db
 
-    # Patch settings and storage
+    # Patch settings, storage, and celery
     with (
         patch("app.core.config.get_settings", return_value=test_settings),
         patch("app.services.storage.get_storage_service", return_value=mock_storage),
         patch("app.api.routes.get_storage_service", return_value=mock_storage),
+        patch("app.api.routes.celery_app", mock_celery),
     ):
         with TestClient(app) as test_client:
             yield test_client

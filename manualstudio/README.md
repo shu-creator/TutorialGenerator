@@ -40,7 +40,7 @@
 - **Storage**: MinIO (S3互換)
 - **動画処理**: FFmpeg, PySceneDetect
 - **音声認識**: OpenAI Whisper API
-- **LLM**: OpenAI GPT-4o
+- **LLM**: OpenAI GPT-4o / Anthropic Claude
 - **PPTX生成**: python-pptx
 
 ## セットアップ
@@ -48,7 +48,7 @@
 ### 必要条件
 
 - Docker & Docker Compose
-- OpenAI APIキー
+- OpenAI APIキー または Anthropic APIキー
 
 ### 1. リポジトリのクローン
 
@@ -66,13 +66,47 @@ cp .env.example .env
 `.env` ファイルを編集し、必要な値を設定:
 
 ```bash
-# 必須: OpenAI APIキー
+# LLMプロバイダーの選択（openai, anthropic, mock）
+LLM_PROVIDER=openai
+
+# OpenAIを使用する場合
 OPENAI_API_KEY=sk-your-api-key-here
+
+# Anthropic Claudeを使用する場合
+# LLM_PROVIDER=anthropic
+# ANTHROPIC_API_KEY=sk-ant-your-api-key-here
+# ANTHROPIC_MODEL=claude-sonnet-4-20250514  # オプション（デフォルト）
+# ANTHROPIC_MAX_TOKENS=4000  # オプション（デフォルト）
 
 # オプション: その他の設定
 MAX_VIDEO_MINUTES=15
 MAX_VIDEO_SIZE_MB=1024
 ```
+
+### LLMプロバイダーについて
+
+ManualStudioはOpenAIとAnthropic Claudeの両方に対応しています：
+
+| プロバイダー | 設定値 | 必要なAPIキー | デフォルトモデル |
+|------------|-------|--------------|-----------------|
+| OpenAI | `openai` | `OPENAI_API_KEY` | gpt-4o |
+| Anthropic | `anthropic` | `ANTHROPIC_API_KEY` | claude-sonnet-4-20250514 |
+| Mock（テスト用） | `mock` | なし | - |
+
+**Anthropicを使う場合:**
+```bash
+# .envに以下を設定
+LLM_PROVIDER=anthropic
+ANTHROPIC_API_KEY=sk-ant-api03-xxx
+
+# オプション: 別のモデルを指定
+ANTHROPIC_MODEL=claude-opus-4-20250514
+ANTHROPIC_MAX_TOKENS=8000
+```
+
+**注意事項:**
+- CIテストではmockプロバイダーを使用するため、実APIは呼び出されません
+- 実APIでの動作確認は手動スモークテストで行ってください（後述）
 
 ### 3. 起動
 
@@ -99,21 +133,42 @@ docker-compose up --build
 3. タイトルと目的を入力（任意）
 4. 「アップロードして生成開始」をクリック
 
-### 2. 処理の確認
+**バッチアップロード（複数ファイル）:**
+1. 「バッチモード」チェックボックスをオンにする
+2. 複数の動画ファイルを選択（最大10件）
+3. タイトル接頭辞と共通の目的を入力
+4. 「バッチアップロード開始」をクリック
+5. 処理結果が表示されたら「ジョブ一覧を見る」で確認
+
+### 2. ジョブ一覧と管理
+
+http://localhost:8000/jobs でジョブ一覧を確認・管理できます:
+
+- **フィルタ**: ステータス（QUEUED/RUNNING/SUCCEEDED/FAILED/CANCELED）で絞り込み
+- **検索**: タイトルや目的で検索
+- **ページング**: 20件ずつ表示、ページ切り替え
+- **自動更新**: 処理中のジョブがある場合は5秒ごとに自動更新
+
+**ジョブ操作:**
+- **キャンセル**: QUEUED/RUNNINGのジョブをキャンセル
+- **リトライ**: FAILEDのジョブを再実行
+
+### 3. 処理の確認
 
 ジョブ詳細ページで処理状況を確認できます:
 - **QUEUED**: 待機中
 - **RUNNING**: 処理中（ステージと進捗率を表示）
 - **SUCCEEDED**: 完了
 - **FAILED**: 失敗（エラーメッセージを表示）
+- **CANCELED**: キャンセル済み
 
-### 3. 結果のダウンロード
+### 4. 結果のダウンロード
 
 処理完了後、以下をダウンロードできます:
 - **PPTX**: PowerPointスライド
 - **frames.zip**: 抽出されたフレーム画像
 
-### 4. 手順の編集とPPTX再生成
+### 5. 手順の編集とPPTX再生成
 
 処理完了後、生成された手順を編集してPPTXを再生成できます:
 
@@ -132,7 +187,7 @@ docker-compose up --build
 
 バージョン履歴により、過去の編集内容も保持されます。
 
-### 5. テーマ設定（企業向けカスタマイズ）
+### 6. テーマ設定（企業向けカスタマイズ）
 
 生成されるPPTXにロゴ、カラー、フッターを設定できます：
 
@@ -180,11 +235,73 @@ Fields:
 Response: { "job_id": "uuid", "status": "QUEUED" }
 ```
 
+### ジョブ一覧取得
+```
+GET /api/jobs?status=QUEUED&q=検索キーワード&page=1&page_size=20&sort=-created_at
+
+Query Parameters:
+- status: ステータスでフィルタ (QUEUED/RUNNING/SUCCEEDED/FAILED/CANCELED)
+- q: タイトル/目的で検索
+- page: ページ番号 (デフォルト: 1)
+- page_size: 1ページあたりの件数 (デフォルト: 20、最大: 100)
+- sort: ソート順 (created_at / -created_at)
+
+Response: {
+  "items": [...],
+  "total": 100,
+  "page": 1,
+  "page_size": 20,
+  "total_pages": 5
+}
+```
+
+### バッチジョブ作成
+```
+POST /api/jobs/batch
+Content-Type: multipart/form-data
+
+Fields:
+- video_files: 動画ファイル（複数、最大10件）
+- title_prefix: タイトル接頭辞 (任意)
+- goal: 共通の目的 (任意)
+- language: 言語コード (デフォルト: ja)
+
+Response: {
+  "created": [{"job_id": "uuid", "file": "filename", "status": "QUEUED"}, ...],
+  "errors": [{"file": "filename", "error": "エラーメッセージ"}, ...],
+  "total_created": 3,
+  "total_errors": 0
+}
+```
+
 ### ジョブ状態取得
 ```
 GET /api/jobs/{job_id}
 
 Response: { "job_id", "status", "stage", "progress", ... }
+```
+
+### ジョブキャンセル
+```
+POST /api/jobs/{job_id}/cancel
+
+Constraints:
+- QUEUED または RUNNING のジョブのみキャンセル可能
+- その他のステータスでは 409 Conflict を返す
+
+Response: { "job_id": "uuid", "status": "CANCELED", "message": "..." }
+```
+
+### ジョブリトライ
+```
+POST /api/jobs/{job_id}/retry
+
+Constraints:
+- FAILED のジョブのみリトライ可能
+- その他のステータスでは 409 Conflict を返す
+- ジョブを最初から再実行
+
+Response: { "job_id": "uuid", "status": "QUEUED", "trace_id": "...", "message": "..." }
 ```
 
 ### steps.json取得
@@ -316,8 +433,11 @@ Response: {
 | `REDIS_URL` | Redis接続URL | (docker-compose設定) |
 | `S3_ENDPOINT_URL` | S3/MinIOエンドポイント | http://minio:9000 |
 | `S3_BUCKET` | ストレージバケット名 | manualstudio |
-| `OPENAI_API_KEY` | OpenAI APIキー | (必須) |
-| `LLM_PROVIDER` | LLMプロバイダー | openai |
+| `OPENAI_API_KEY` | OpenAI APIキー | (LLM_PROVIDER=openai時必須) |
+| `ANTHROPIC_API_KEY` | Anthropic APIキー | (LLM_PROVIDER=anthropic時必須) |
+| `ANTHROPIC_MODEL` | Anthropicモデル | claude-sonnet-4-20250514 |
+| `ANTHROPIC_MAX_TOKENS` | Anthropic最大トークン数 | 4000 |
+| `LLM_PROVIDER` | LLMプロバイダー (openai/anthropic/mock) | openai |
 | `TRANSCRIBE_PROVIDER` | 文字起こしプロバイダー | openai |
 | `MAX_VIDEO_MINUTES` | 動画の最大長さ（分） | 15 |
 | `MAX_VIDEO_SIZE_MB` | 動画の最大サイズ（MB） | 1024 |
@@ -327,16 +447,21 @@ Response: {
 
 ### よくある問題
 
-#### 1. 「OPENAI_API_KEY not configured」エラー
+#### 1. 「OPENAI_API_KEY not configured」または「ANTHROPIC_API_KEY not configured」エラー
 
-`.env` ファイルに `OPENAI_API_KEY` が設定されていません。
+`.env` ファイルに使用するプロバイダーのAPIキーが設定されていません。
 
 ```bash
 # .envファイルを確認
-cat .env | grep OPENAI
+cat .env | grep -E "(OPENAI|ANTHROPIC|LLM_PROVIDER)"
 
-# 設定されていない場合は追加
+# OpenAI使用時
+echo "LLM_PROVIDER=openai" >> .env
 echo "OPENAI_API_KEY=sk-your-key-here" >> .env
+
+# Anthropic使用時
+echo "LLM_PROVIDER=anthropic" >> .env
+echo "ANTHROPIC_API_KEY=sk-ant-your-key-here" >> .env
 
 # コンテナを再起動
 docker-compose restart backend worker
@@ -464,12 +589,39 @@ docker compose -f docker-compose.yml -f docker-compose.test.yml up -d
 docker compose down
 ```
 
+#### 手動スモークテスト（実API）
+
+CIでは外部APIを呼び出しません。実APIでの動作確認は手動で行ってください：
+
+```bash
+# 1. Docker環境を起動（Anthropicの場合）
+LLM_PROVIDER=anthropic ANTHROPIC_API_KEY=sk-ant-xxx docker-compose up -d
+
+# 2. テスト用動画をアップロード
+curl -X POST http://localhost:8000/api/jobs \
+  -F "video_file=@sample.mp4" \
+  -F "title=Test" \
+  -F "goal=Testing Anthropic"
+
+# 3. ジョブ状態を確認
+curl http://localhost:8000/api/jobs/{job_id}
+
+# 4. steps.jsonを確認（llm_providerがanthropicになっていること）
+curl http://localhost:8000/api/jobs/{job_id}/steps | jq '.steps_json.source.llm_provider'
+# 期待値: "anthropic"
+```
+
+**確認ポイント:**
+- ジョブがSUCCEEDEDになること
+- `steps.json` の `source.llm_provider` が設定したプロバイダー名になっていること
+- 生成されたstepsがJSON schema準拠であること
+
 #### CI（GitHub Actions）
 
 PRを作成すると自動的にCIが実行されます：
 - Python 3.11でユニットテスト実行
 - ruffによるlint/format チェック
-- mockプロバイダーを使用（外部API不要）
+- mockプロバイダーを使用（外部API不要、実APIは呼び出されません）
 
 ローカルでCIと同じ環境を再現する場合：
 
@@ -536,11 +688,13 @@ alembic downgrade -1
 - [x] PPTX再生成機能
 - [x] バージョン履歴管理
 - [x] テーマ設定（ロゴ/カラー/フッター）
+- [x] Claude対応（Anthropic API）
+- [x] ジョブ一覧・検索・フィルタ
+- [x] バッチ処理（複数動画の一括処理）
+- [x] ジョブキャンセル・リトライ
 - [ ] スライドテンプレートのカスタマイズ
 - [ ] 複数言語対応の強化
 - [ ] Azure/AWS Transcribe対応
-- [ ] Claude対応（Anthropic API）
-- [ ] バッチ処理（複数動画の一括処理）
 
 ## ライセンス
 
