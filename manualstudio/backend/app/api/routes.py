@@ -292,12 +292,28 @@ async def create_batch_jobs(
             storage.upload_file(video_file.file, video_key, video_file.content_type)
             job.input_video_uri = f"s3://{settings.s3_bucket}/{video_key}"
 
-            db.commit()
-
             # Queue the processing task
-            celery_app.send_task(
-                "app.workers.tasks.process_video", args=[str(job_id)], task_id=str(job_id)
-            )
+            try:
+                celery_app.send_task(
+                    "app.workers.tasks.process_video",
+                    args=[str(job_id)],
+                    task_id=str(job_id),
+                )
+            except Exception as e:
+                db.rollback()
+                try:
+                    storage.delete_object(video_key)
+                except Exception as cleanup_error:
+                    logger.warning(f"Failed to cleanup uploaded video: {cleanup_error}")
+                errors.append(
+                    {
+                        "file": filename,
+                        "error": f"Failed to queue job: {e}",
+                    }
+                )
+                continue
+
+            db.commit()
 
             created_jobs.append(
                 {
@@ -312,6 +328,11 @@ async def create_batch_jobs(
         except Exception as e:
             logger.error(f"Failed to create job for {video_file.filename}: {e}")
             db.rollback()
+            if "video_key" in locals():
+                try:
+                    storage.delete_object(video_key)
+                except Exception as cleanup_error:
+                    logger.warning(f"Failed to cleanup uploaded video: {cleanup_error}")
             errors.append(
                 {
                     "file": video_file.filename or f"file_{idx}",

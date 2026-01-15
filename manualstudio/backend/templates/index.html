@@ -197,12 +197,26 @@ document.getElementById('upload-form').addEventListener('submit', async function
                     progressDiv.style.display = 'none';
                     batchResult.style.display = 'block';
 
+                    const escapeHtml = (text) => {
+                        if (text === null || text === undefined) {
+                            return '';
+                        }
+                        return String(text)
+                            .replace(/&/g, '&amp;')
+                            .replace(/</g, '&lt;')
+                            .replace(/>/g, '&gt;')
+                            .replace(/"/g, '&quot;')
+                            .replace(/'/g, '&#039;');
+                    };
+
                     let html = `<p>作成成功: ${response.total_created}件 / エラー: ${response.total_errors}件</p>`;
 
                     if (response.created.length > 0) {
                         html += '<h4>作成されたジョブ:</h4><ul>';
                         response.created.forEach(job => {
-                            html += `<li><a href="/jobs/${job.job_id}">${job.file}</a> - ${job.status}</li>`;
+                            const fileLabel = escapeHtml(job.file);
+                            const statusLabel = escapeHtml(job.status);
+                            html += `<li><a href="/jobs/${job.job_id}">${fileLabel}</a> - ${statusLabel}</li>`;
                         });
                         html += '</ul>';
                     }
@@ -210,7 +224,9 @@ document.getElementById('upload-form').addEventListener('submit', async function
                     if (response.errors.length > 0) {
                         html += '<h4 style="color: #dc3545;">エラー:</h4><ul>';
                         response.errors.forEach(err => {
-                            html += `<li>${err.file}: ${err.error}</li>`;
+                            const fileLabel = escapeHtml(err.file);
+                            const errorLabel = escapeHtml(err.error);
+                            html += `<li>${fileLabel}: ${errorLabel}</li>`;
                         });
                         html += '</ul>';
                     }
