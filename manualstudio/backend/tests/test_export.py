@@ -494,6 +494,63 @@ class TestSRTGeneration:
 
         assert "00:00:01,234 --> 00:00:05,678" in srt
 
+    def test_srt_end_before_start_correction(self):
+        """Test that end_sec < start_sec is corrected to end_sec = start_sec."""
+        segments = [
+            {"start_sec": 10, "end_sec": 5, "text": "Invalid timing"},  # end < start
+            {"start_sec": 20, "end_sec": 25, "text": "Normal timing"},
+        ]
+        srt = generate_srt(segments)
+
+        # Invalid segment should have end corrected to equal start
+        assert "00:00:10,000 --> 00:00:10,000" in srt
+        # Normal segment unchanged
+        assert "00:00:20,000 --> 00:00:25,000" in srt
+        # Both segments should be in output
+        assert "Invalid timing" in srt
+        assert "Normal timing" in srt
+
+    def test_srt_unsorted_segments_produce_sorted_output(self):
+        """Test that segments not in time order are sorted by start_sec in output."""
+        segments = [
+            {"start_sec": 30, "end_sec": 35, "text": "Third segment"},
+            {"start_sec": 10, "end_sec": 15, "text": "First segment"},
+            {"start_sec": 50, "end_sec": 55, "text": "Fourth segment"},
+            {"start_sec": 20, "end_sec": 25, "text": "Second segment"},
+        ]
+        srt = generate_srt(segments)
+
+        lines = srt.strip().split("\n")
+        # Extract the text lines (every 4th line starting from index 2: seq, time, text, blank)
+        text_lines = []
+        i = 0
+        while i < len(lines):
+            if i + 2 < len(lines):
+                text_lines.append(lines[i + 2])
+            i += 4
+
+        # Verify order is by start_sec
+        assert text_lines == [
+            "First segment",
+            "Second segment",
+            "Third segment",
+            "Fourth segment",
+        ]
+
+    def test_srt_rounding_does_not_cause_drift(self):
+        """Test that millisecond rounding doesn't cause timestamp drift."""
+        # Test with values that might cause floating point issues
+        segments = [
+            {"start_sec": 0.1 + 0.1 + 0.1, "end_sec": 0.4, "text": "Rounding test"},  # 0.3
+            {"start_sec": 59.999, "end_sec": 60.001, "text": "Boundary test"},
+        ]
+        srt = generate_srt(segments)
+
+        # 0.3 seconds should round correctly
+        assert "00:00:00,300" in srt
+        # 59.999 and 60.001 should be close to boundary
+        assert "00:00:59,999 --> 00:01:00,001" in srt
+
 
 class TestSRTAPIEndpoints:
     """Test SRT API endpoints."""
@@ -626,3 +683,93 @@ class TestSRTAPIEndpoints:
         assert response.status_code == 200
         content_disposition = response.headers.get("content-disposition", "")
         assert ".srt" in content_disposition
+
+
+class TestTranscriptPersistenceConsistency:
+    """Test transcript storage consistency and fallback behavior."""
+
+    def test_srt_falls_back_to_db_when_storage_missing(
+        self, client, succeeded_job, test_db_session, mock_storage
+    ):
+        """Test that SRT download falls back to DB when transcript_uri points to missing file."""
+        # Set up: transcript_uri points to non-existent storage key, but DB has segments
+        succeeded_job.transcript_uri = "s3://test-bucket/jobs/missing/transcript/segments.json"
+        succeeded_job.transcript_segments = [
+            {"start_sec": 0, "end_sec": 5, "text": "DBフォールバック成功"},
+        ]
+        test_db_session.commit()
+
+        # Storage will raise exception for missing key (mock_storage default behavior)
+        response = client.get(f"/api/jobs/{succeeded_job.id}/download/srt")
+
+        # Should succeed using DB fallback
+        assert response.status_code == 200
+        assert "DBフォールバック成功" in response.text
+
+    def test_srt_prefers_storage_over_db_when_both_exist(
+        self, client, succeeded_job, test_db_session, mock_storage
+    ):
+        """Test that storage transcript is preferred over DB when both exist."""
+        import json
+
+        # Set up: both storage and DB have segments, but with different content
+        transcript_storage = [
+            {"start_sec": 0, "end_sec": 5, "text": "ストレージ版"},
+        ]
+        transcript_db = [
+            {"start_sec": 0, "end_sec": 5, "text": "DB版"},
+        ]
+
+        transcript_key = f"jobs/{succeeded_job.id}/transcript/segments.json"
+        mock_storage.upload_bytes(
+            json.dumps(transcript_storage).encode("utf-8"),
+            transcript_key,
+            "application/json",
+        )
+        succeeded_job.transcript_uri = f"s3://test-bucket/{transcript_key}"
+        succeeded_job.transcript_segments = transcript_db
+        test_db_session.commit()
+
+        response = client.get(f"/api/jobs/{succeeded_job.id}/download/srt")
+
+        assert response.status_code == 200
+        # Should use storage version, not DB version
+        assert "ストレージ版" in response.text
+        assert "DB版" not in response.text
+
+    def test_srt_returns_404_when_neither_storage_nor_db_has_transcript(
+        self, client, succeeded_job, test_db_session, mock_storage
+    ):
+        """Test that 404 is returned when neither storage nor DB has transcript."""
+        # Both transcript_uri and transcript_segments are None
+        succeeded_job.transcript_uri = None
+        succeeded_job.transcript_segments = None
+        test_db_session.commit()
+
+        response = client.get(f"/api/jobs/{succeeded_job.id}/download/srt")
+
+        assert response.status_code == 404
+        assert "No transcript available" in response.json()["detail"]
+
+    def test_srt_with_corrupt_storage_falls_back_to_db(
+        self, client, succeeded_job, test_db_session, mock_storage
+    ):
+        """Test fallback when storage contains invalid JSON."""
+        # Store invalid JSON in storage
+        transcript_key = f"jobs/{succeeded_job.id}/transcript/segments.json"
+        mock_storage.upload_bytes(
+            b"not valid json {{{",
+            transcript_key,
+            "application/json",
+        )
+        succeeded_job.transcript_uri = f"s3://test-bucket/{transcript_key}"
+        succeeded_job.transcript_segments = [
+            {"start_sec": 0, "end_sec": 5, "text": "正常なDBデータ"},
+        ]
+        test_db_session.commit()
+
+        response = client.get(f"/api/jobs/{succeeded_job.id}/download/srt")
+
+        # Should fall back to DB and succeed
+        assert response.status_code == 200
+        assert "正常なDBデータ" in response.text
