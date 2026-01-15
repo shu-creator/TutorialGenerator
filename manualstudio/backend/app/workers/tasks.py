@@ -275,8 +275,15 @@ def process_video(self, job_id: str):
             # The frame_file from LLM might be step_XXX.png format
             # We need to map it to actual candidate files
             if frame_file.startswith("step_"):
-                # Find corresponding candidate
-                idx = step_no - 1
+                idx = None
+                if frame_file.endswith(".png"):
+                    frame_num = frame_file.removeprefix("step_").removesuffix(".png")
+                    if frame_num.isdigit():
+                        idx = int(frame_num) - 1
+
+                if idx is None:
+                    idx = step_no - 1
+
                 if 0 <= idx < len(candidates):
                     candidate = candidates[idx]
                     src_path = frame_local_paths.get(candidate.filename)

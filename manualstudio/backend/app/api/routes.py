@@ -4,6 +4,7 @@ import os
 import uuid
 from datetime import datetime
 from typing import Optional
+from urllib.parse import quote
 
 from fastapi import APIRouter, Depends, File, Form, HTTPException, UploadFile, Body
 from fastapi.responses import JSONResponse, RedirectResponse
@@ -33,6 +34,11 @@ class StepsUpdateRequest(BaseModel):
     """Request body for updating steps."""
     steps_json: dict
     edit_note: Optional[str] = None
+
+
+def _build_content_disposition(filename: str) -> str:
+    safe_name = quote(filename, safe="")
+    return f"attachment; filename*=UTF-8''{safe_name}"
 
 
 @router.post("/jobs")
@@ -103,11 +109,24 @@ async def create_job(
     db.commit()
 
     # Queue the processing task
-    celery_app.send_task(
-        "app.workers.tasks.process_video",
-        args=[str(job_id)],
-        task_id=str(job_id)
-    )
+    try:
+        celery_app.send_task(
+            "app.workers.tasks.process_video",
+            args=[str(job_id)],
+            task_id=str(job_id)
+        )
+    except Exception as e:
+        logger.error(f"Failed to queue job {job_id}: {e}")
+        job.status = JobStatus.FAILED
+        job.error_code = "QUEUE_ERROR"
+        job.error_message = str(e)
+        job.updated_at = datetime.utcnow()
+        db.commit()
+        try:
+            storage.delete_object(video_key)
+        except Exception as cleanup_error:
+            logger.warning(f"Failed to cleanup uploaded video: {cleanup_error}")
+        raise HTTPException(status_code=500, detail="Failed to queue processing task")
 
     logger.info(f"Job created: {job_id}")
 
@@ -427,7 +446,7 @@ async def download_pptx(job_id: str, db: Session = Depends(get_db)):
             key,
             expires_in=3600,
             response_content_type="application/vnd.openxmlformats-officedocument.presentationml.presentation",
-            response_content_disposition=f'attachment; filename="{filename}.pptx"'
+            response_content_disposition=_build_content_disposition(f"{filename}.pptx")
         )
         return RedirectResponse(url=url)
     except Exception as e:
@@ -468,7 +487,7 @@ async def download_frames(job_id: str, db: Session = Depends(get_db)):
             zip_key,
             expires_in=3600,
             response_content_type="application/zip",
-            response_content_disposition=f'attachment; filename="{filename}.zip"'
+            response_content_disposition=_build_content_disposition(f"{filename}.zip")
         )
         return RedirectResponse(url=url)
     except Exception as e:
@@ -494,7 +513,11 @@ async def get_frame(job_id: str, frame_file: str, db: Session = Depends(get_db))
     try:
         storage = get_storage_service()
         frames_prefix = storage.key_from_uri(job.frames_prefix_uri)
-        frame_key = f"{frames_prefix}{frame_file}"
+        normalized_frame = os.path.basename(frame_file)
+        if normalized_frame != frame_file:
+            raise HTTPException(status_code=400, detail="Invalid frame filename")
+
+        frame_key = f"{frames_prefix}{normalized_frame}"
 
         url = storage.get_presigned_url(
             frame_key,
