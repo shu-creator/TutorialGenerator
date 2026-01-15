@@ -16,13 +16,11 @@ def _format_srt_timestamp(seconds: float) -> str:
     Returns:
         SRT formatted timestamp (e.g., "00:01:05,500")
     """
-    if seconds < 0:
-        seconds = 0
+    total_millis = max(0, int(round(seconds * 1000)))
 
-    hours = int(seconds // 3600)
-    minutes = int((seconds % 3600) // 60)
-    secs = int(seconds % 60)
-    millis = int((seconds % 1) * 1000)
+    hours, remainder = divmod(total_millis, 3600 * 1000)
+    minutes, remainder = divmod(remainder, 60 * 1000)
+    secs, millis = divmod(remainder, 1000)
 
     return f"{hours:02d}:{minutes:02d}:{secs:02d},{millis:03d}"
 
@@ -41,17 +39,24 @@ def generate_srt(transcript_segments: list[dict[str, Any]]) -> str:
         return ""
 
     lines: list[str] = []
+    sequence = 1
 
-    for i, segment in enumerate(transcript_segments, 1):
-        start_sec = segment.get("start_sec", 0)
-        end_sec = segment.get("end_sec", 0)
+    segments_sorted = sorted(transcript_segments, key=lambda s: s.get("start_sec", 0))
+
+    for segment in segments_sorted:
+        start_sec = float(segment.get("start_sec", 0) or 0)
+        end_sec = float(segment.get("end_sec", 0) or 0)
         text = segment.get("text", "").strip()
 
         if not text:
             continue
 
+        if end_sec < start_sec:
+            end_sec = start_sec
+
         # Sequence number
-        lines.append(str(i))
+        lines.append(str(sequence))
+        sequence += 1
 
         # Timestamp line
         start_ts = _format_srt_timestamp(start_sec)
