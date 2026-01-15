@@ -5,7 +5,7 @@ from typing import Optional
 
 from pptx import Presentation
 from pptx.util import Inches, Pt
-from pptx.dml.color import RgbColor
+from pptx.dml.color import RGBColor
 from pptx.enum.text import PP_ALIGN, MSO_ANCHOR
 
 from app.core.logging import get_logger
@@ -170,7 +170,7 @@ class PPTXGenerator:
         p = tf.paragraphs[0]
         p.text = f"時間: {time_range}"
         p.font.size = Pt(14)
-        p.font.color.rgb = RgbColor(100, 100, 100)
+        p.font.color.rgb = RGBColor(100, 100, 100)
 
         # Action
         p = tf.add_paragraph()
@@ -190,7 +190,7 @@ class PPTXGenerator:
             p = tf.add_paragraph()
             p.text = f"注意: {caution}"
             p.font.size = Pt(16)
-            p.font.color.rgb = RgbColor(200, 50, 50)
+            p.font.color.rgb = RGBColor(200, 50, 50)
             p.space_before = Pt(12)
 
         # Add narration to speaker notes
