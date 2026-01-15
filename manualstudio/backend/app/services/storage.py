@@ -1,5 +1,7 @@
 """Storage service for S3/MinIO."""
 
+from __future__ import annotations
+
 import io
 import os
 import zipfile

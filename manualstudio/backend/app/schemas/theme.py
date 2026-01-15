@@ -1,5 +1,7 @@
 """Theme schema definitions."""
 
+from __future__ import annotations
+
 import re
 
 from pydantic import BaseModel, Field, field_validator
