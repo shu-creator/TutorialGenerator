@@ -1,0 +1,27 @@
+# Docker Compose for E2E testing with mock providers
+# Usage: docker compose -f docker-compose.yml -f docker-compose.test.yml up
+
+version: '3.8'
+
+services:
+  backend:
+    environment:
+      # Override to use mock providers (no external API calls)
+      LLM_PROVIDER: mock
+      TRANSCRIBE_PROVIDER: mock
+      # Reduce limits for faster testing
+      MAX_VIDEO_MINUTES: 5
+      MAX_VIDEO_SIZE_MB: 100
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8000/health"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+      start_period: 30s
+
+  worker:
+    environment:
+      # Override to use mock providers (no external API calls)
+      LLM_PROVIDER: mock
+      TRANSCRIBE_PROVIDER: mock
+      MAX_VIDEO_MINUTES: 5
