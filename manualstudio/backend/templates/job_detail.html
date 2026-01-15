@@ -85,6 +85,15 @@
         <a href="/api/jobs/{{ job.id }}/download/frames" class="btn btn-secondary">
             フレーム画像 (.zip)
         </a>
+        {% if job.transcript_segments or job.transcript_uri %}
+        <a href="/api/jobs/{{ job.id }}/download/srt" class="btn btn-secondary">
+            字幕 (.srt)
+        </a>
+        {% else %}
+        <span class="btn btn-secondary" style="opacity: 0.5; cursor: not-allowed;" title="音声なし（字幕なし）">
+            字幕 (.srt)
+        </span>
+        {% endif %}
     </div>
 </div>
 

@@ -1,9 +1,75 @@
-"""Export services for generating Markdown and HTML from steps.json."""
+"""Export services for generating Markdown, HTML, and SRT from steps/transcript data."""
 
 from __future__ import annotations
 
 import html
 from typing import Any
+
+
+def _format_srt_timestamp(seconds: float) -> str:
+    """
+    Format seconds as SRT timestamp (HH:MM:SS,mmm).
+
+    Args:
+        seconds: Time in seconds (e.g., 65.5)
+
+    Returns:
+        SRT formatted timestamp (e.g., "00:01:05,500")
+    """
+    total_millis = max(0, int(round(seconds * 1000)))
+
+    hours, remainder = divmod(total_millis, 3600 * 1000)
+    minutes, remainder = divmod(remainder, 60 * 1000)
+    secs, millis = divmod(remainder, 1000)
+
+    return f"{hours:02d}:{minutes:02d}:{secs:02d},{millis:03d}"
+
+
+def generate_srt(transcript_segments: list[dict[str, Any]]) -> str:
+    """
+    Generate SRT subtitle file from transcript segments.
+
+    Args:
+        transcript_segments: List of segments with start_sec, end_sec, text
+
+    Returns:
+        SRT formatted string
+    """
+    if not transcript_segments:
+        return ""
+
+    lines: list[str] = []
+    sequence = 1
+
+    segments_sorted = sorted(transcript_segments, key=lambda s: s.get("start_sec", 0))
+
+    for segment in segments_sorted:
+        start_sec = float(segment.get("start_sec", 0) or 0)
+        end_sec = float(segment.get("end_sec", 0) or 0)
+        text = segment.get("text", "").strip()
+
+        if not text:
+            continue
+
+        if end_sec < start_sec:
+            end_sec = start_sec
+
+        # Sequence number
+        lines.append(str(sequence))
+        sequence += 1
+
+        # Timestamp line
+        start_ts = _format_srt_timestamp(start_sec)
+        end_ts = _format_srt_timestamp(end_sec)
+        lines.append(f"{start_ts} --> {end_ts}")
+
+        # Text (can be multiline)
+        lines.append(text)
+
+        # Blank line separator
+        lines.append("")
+
+    return "\n".join(lines)
 
 
 def generate_markdown(steps_data: dict[str, Any]) -> str:

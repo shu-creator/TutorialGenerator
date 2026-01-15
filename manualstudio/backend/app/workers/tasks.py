@@ -179,6 +179,15 @@ def process_video(self, job_id: str):
             transcript_segments = transcription_service.segments_to_dict(segments)
 
             job.transcript_segments = transcript_segments
+
+            # Save transcript segments to storage
+            transcript_bytes = json.dumps(transcript_segments, ensure_ascii=False, indent=2).encode(
+                "utf-8"
+            )
+            transcript_key = f"jobs/{job_id}/transcript/segments.json"
+            storage.upload_bytes(transcript_bytes, transcript_key, "application/json")
+            job.transcript_uri = f"s3://{settings.s3_bucket}/{transcript_key}"
+
             db.commit()
 
             logger.info(f"Transcribed {len(transcript_segments)} segments")

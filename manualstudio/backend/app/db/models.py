@@ -70,6 +70,7 @@ class Job(Base):
     transcription_provider = Column(String(50), nullable=True)
     llm_provider = Column(String(50), nullable=True)
     transcript_segments = Column(JSON, nullable=True)
+    transcript_uri = Column(String(500), nullable=True)  # Storage URI for transcript segments
     candidate_frames = Column(JSON, nullable=True)
 
     # Steps version tracking
@@ -111,6 +112,7 @@ class Job(Base):
                 "steps_json": self.steps_json_uri is not None,
                 "pptx": self.pptx_uri is not None,
                 "frames": self.frames_prefix_uri is not None,
+                "transcript": self.transcript_uri is not None,
             },
         }
 
